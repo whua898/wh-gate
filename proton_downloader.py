@@ -161,6 +161,11 @@ def _wait_new_conf(download_dir, before, timeout=60):
     return None
 
 def process_downloads(driver, download_dir, downloaded_ids):
+    """旧式单步下载流程 (Delta-Kronecker 参考项目): 传 WireGuard 页签 -> 兼容保留。"""
+    return _legacy_downloads(driver, download_dir, downloaded_ids)
+
+
+def _legacy_downloads(driver, download_dir, downloaded_ids):
     """逐国家逐台下载; 返回 (全部完成?, )。会话达 MAX_DL 即返回 False (下次增量继续)。"""
     try:
         WebDriverWait(driver, 30).until(
@@ -230,6 +235,129 @@ def process_downloads(driver, download_dir, downloaded_ids):
         except Exception:
             continue
     return True
+
+# 新流程: 「创建」配置 -> 页面下方配置记录 -> 「下载」.conf (用户实测 2026-10-17)
+# 每份配置以证书名称注册; 本脚本默认单证书覆盖全部免费服务器
+# (只创建一次, 后续服务器复用同一证书, 避免免费版 key 槽被挤爆)。
+CERT_NAME = _env("PROTON_CERT_NAME", "wh-gate")
+
+
+def _click_text(driver, text, timeout=20):
+    el = WebDriverWait(driver, timeout).until(EC.element_to_be_clickable(
+        (By.XPATH, f"//*[normalize-space(text())='{text}']")))
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
+    time.sleep(1)
+    try:
+        el.click()
+    except Exception:
+        ActionChains(driver).move_to_element(el).click().perform()
+    return el
+
+
+def ensure_certificate(driver):
+    """填证书名 + 选平台 GNU/Linux + 创建 (若已存在同名证书则跳过)。"""
+    try:
+        inputs = [e for e in driver.find_elements(By.CSS_SELECTOR, "input")
+                  if e.is_displayed()]
+        if inputs:
+            inputs[0].clear()
+            inputs[0].send_keys(CERT_NAME)
+            time.sleep(1)
+        try:
+            _click_text(driver, "GNU/Linux", timeout=10)
+            time.sleep(2)
+        except Exception:
+            log("CERT", "平台 GNU/Linux 未命中, 使用默认平台继续")
+        if CERT_NAME in (driver.page_source or ""):
+            log("CERT", f"已存在证书 {CERT_NAME}, 跳过创建")
+            return True
+        _click_text(driver, "创建")
+        time.sleep(4)
+        log("CERT", f"已创建证书 {CERT_NAME}")
+        return True
+    except Exception as exc:
+        log("CERT", f"创建证书失败: {type(exc).__name__} (站点可能改版)")
+        return False
+
+
+def process_wireguard_tab(driver, download_dir, downloaded_ids):
+    """新版创建->下载两步流程 (downloaded_ids 存服务器名, 如 NL-FREE#79)。"""
+    try:
+        _click_text(driver, "WireGuard")
+    except Exception as exc:
+        log("WG", f"找不到 WireGuard 页签: {type(exc).__name__} (站点可能改版)")
+        return False
+    time.sleep(3)
+    if not ensure_certificate(driver):
+        return False
+    new_count = 0
+    countries = driver.find_elements(By.CSS_SELECTOR, "details")
+    if not countries:
+        log("WG", "未找到服务器分组 (选择器失效, 截图已备查)")
+        return False
+    log("WG", f"发现 {len(countries)} 个分组")
+    rows = []
+    for c in countries:
+        try:
+            summary = c.find_element(By.CSS_SELECTOR, "summary").text.strip().split("\n")[0]
+        except Exception:
+            summary = "?"
+        try:
+            driver.execute_script("arguments[0].open = true;", c)
+            time.sleep(1)
+            for r in c.find_elements(By.CSS_SELECTOR, "tr"):
+                rows.append((summary, r))
+        except Exception:
+            continue
+    log("WG", f"共 {len(rows)} 台候选服务器")
+    for summary, row in rows:
+        if new_count >= MAX_DL:
+            log("WG", f"本会话上限 {MAX_DL}, 停下 (下次增量继续)")
+            return False
+        try:
+            tds = row.find_elements(By.CSS_SELECTOR, "td")
+            sid = tds[0].text.strip() if tds else ""
+        except Exception:
+            continue
+        if not sid or sid in downloaded_ids:
+            continue
+        creates = row.find_elements(By.XPATH, ".//*[normalize-space(text())='创建']")
+        if not creates:
+            continue  # 已创建过的行只有「下载」; 本轮只走创建逻辑
+        btn = creates[0]
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+        time.sleep(1)
+        before = {f for f in os.listdir(download_dir) if f.lower().endswith(".conf")}
+        try:
+            try:
+                btn.click()
+            except Exception:
+                ActionChains(driver).move_to_element(btn).click().perform()
+        except Exception:
+            continue
+        time.sleep(5)  # 等配置记录生成 (下方列表出现「下载」)
+        got = None
+        for rec in driver.find_elements(
+                By.XPATH, f"//tr[td[normalize-space(text())='{sid}']]"):
+            for db in rec.find_elements(By.XPATH, ".//*[normalize-space(text())='下载']"):
+                try:
+                    db.click()
+                    time.sleep(2)
+                    got = _wait_new_conf(download_dir, before)
+                    break
+                except Exception:
+                    continue
+            if got:
+                break
+        if got:
+            new_count += 1
+            downloaded_ids.add(sid)
+            log("WG", f"[{summary}] 已创建并下载 {sid} ({got}), 本轮 {new_count}/{MAX_DL}")
+        else:
+            log("WG", f"{sid} 创建/下载未拿到文件, 跳过")
+        time.sleep(random.randint(60, 90))  # 防风控随机间隔 (与参考项目一致)
+    return True
+
 
 # ---------------------------------------------------------------------------
 # 密文合并 (仓库只存密文, 明文绝不入库)
@@ -303,7 +431,7 @@ def main():
                 die("下载页打不开 (调试图已保存到 debug/ artifact)")
             done = False
             for attempt in (1, 2):
-                done = process_downloads(driver, dl, downloaded)
+                done = process_wireguard_tab(driver, dl, downloaded)
                 if done:
                     break
                 log("SESS", f"第 {attempt} 轮达会话上限 {MAX_DL}, 重新登录继续")
