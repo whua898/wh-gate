@@ -1,4 +1,4 @@
-# VPN Gate SSTP 节点自动优选（edgetunnel 链式代理）
+# VPN Gate SSTP 节点自动优选（edgetunnel 链式代理）+ ProtonVPN 免费节点订阅
 
 自动抓取 [VPN Gate](https://www.vpngate.net/) 的 SSTP 节点，调用检测 Worker 逐个验证可用性，按国家分组（仅收录住宅 IP，非住宅场景用 ed 其他节点），生成可直接粘贴进 edgetunnel 后台的链式代理清单。**每 30 分钟自动更新一次。**
 
