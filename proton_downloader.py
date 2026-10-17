@@ -13,6 +13,9 @@ Secrets (环境变量):
   DOWNLOAD_SCOPE             all | first (默认 all; first 只下第一个国家, 调试用)
   MAX_DOWNLOADS_PER_SESSION  默认 20 (防风控, 与参考项目一致)
   PROTON_INTERVAL            每台下载后的随机间隔秒数 min-max (默认 5-15; 被限流时调回 60-90)
+  PROTON_PER_COUNTRY         每国只下载页面负载百分比最低的 N 台 (默认 3; 0 = 该国全部)
+  PROTON_ROUNDS              达会话上限后重新登录续下的轮数 (默认 2)
+  PROTON_ROUND_GAP           重新登录前的等待秒数 (默认 120)
 退出码:
   0 = 正常完成 (含 0 新增); 1 = 硬性失败 (登录失败/下载页打不开/WebDriver 异常)。
 产物不提交明文: 与仓库密文合并后重新加密写回 proton/proton_configs.enc。
@@ -57,6 +60,10 @@ _iv = re.findall(r"\d+", os.environ.get("PROTON_INTERVAL", "5-15") or "5-15")
 IV_MIN, IV_MAX = (int(_iv[0]), int(_iv[1])) if len(_iv) >= 2 else (5, 15)
 if IV_MIN > IV_MAX:
     IV_MIN, IV_MAX = IV_MAX, IV_MIN
+# 每国只保留负载最低 N 台 (0 = 全部); 页面服务器行自带负载百分比, 无需额外请求
+PER_COUNTRY = max(0, int(os.environ.get("PROTON_PER_COUNTRY", "3") or "3"))
+ROUNDS = max(1, int(os.environ.get("PROTON_ROUNDS", "2") or "2"))
+ROUND_GAP = max(0, int(os.environ.get("PROTON_ROUND_GAP", "120") or "120"))
 ENC_PATH = os.path.join(REPO_DIR, "proton", "proton_configs.enc")
 IDS_PATH = os.path.join(REPO_DIR, "proton", "downloaded_wg_ids.json")
 LOGIN_URL = "https://account.protonvpn.com/login"
@@ -498,6 +505,17 @@ def _find_row_btn(driver, sid):
     return None
 
 
+def select_least_loaded(items, per_country):
+    """每国只保留负载百分比最低的 per_country 台, 按负载升序返回 (最闲的先下)。
+
+    items: [(load, sid), ...]; load 为整数负载百分比, 解析不到时按 999 排最后。
+    per_country<=0 或台数不足时原样返回。
+    """
+    if per_country <= 0 or len(items) <= per_country:
+        return items
+    return sorted(items, key=lambda it: it[0])[:per_country]
+
+
 def process_wireguard_tab(driver, download_dir, downloaded_ids):
     """新版创建->下载两步流程 (downloaded_ids 存服务器名, 如 NL-FREE#79)。
     点「创建」后弹出配置弹窗 (标题=服务器名, 文本/二维码页签, 关闭/下载按钮):
@@ -519,11 +537,15 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
         return None
     log("WG", f"发现 {len(countries)} 个分组")
     rows = []  # (国家, 服务器名); 按名重定位, 避免弹窗重渲染后元素失效
+    by_country = {}  # 国家 -> [(负载%, 服务器名), ...]
     for c in countries:
         try:
-            summary = c.find_element(By.CSS_SELECTOR, "summary").text.strip().split("\n")[0]
+            full = c.find_element(By.CSS_SELECTOR, "summary").text.strip()
         except Exception:
-            summary = "?"
+            full = "?"
+        label = full.split("\n")[0].strip() or "?"  # 如 "JP-FREE" / "荷兰"
+        m = re.search(r"(\d+)\s*%", full)  # summary 文本含负载百分比
+        load = int(m.group(1)) if m else 999
         try:
             driver.execute_script("arguments[0].open = true;", c)
             time.sleep(1)
@@ -532,12 +554,18 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
                     tds = r.find_elements(By.CSS_SELECTOR, "td")
                     sid = tds[0].text.strip() if tds else ""
                     if sid:
-                        rows.append((summary, sid))
+                        by_country.setdefault(label, []).append((load, sid))
                 except Exception:
                     continue
         except Exception:
             continue
-    log("WG", f"共 {len(rows)} 台候选服务器")
+    for label, items in by_country.items():
+        kept = select_least_loaded(items, PER_COUNTRY)
+        if PER_COUNTRY > 0 and len(items) > len(kept):
+            log("COUNTRY", f"{label} 共 {len(items)} 台, 只保留负载最低 {len(kept)} 台: "
+                + ", ".join(f"{sid}({load}%)" for load, sid in kept))
+        rows.extend((label, sid) for _load, sid in kept)
+    log("WG", f"共 {len(rows)} 台候选服务器 (每国负载最低 {PER_COUNTRY} 台, 0=全部)")
     for summary, sid in rows:
         if new_count >= MAX_DL:
             log("WG", f"本会话上限 {MAX_DL}, 停下 (下次增量继续)")
@@ -646,16 +674,19 @@ def main():
             if not goto_downloads(driver):
                 save_debug(driver, os.path.join(REPO_DIR, "debug"))
                 die("下载页打不开 (调试图已保存到 debug/ artifact)")
-            for attempt in (1, 2):
+            for attempt in range(1, ROUNDS + 1):
                 rc = process_wireguard_tab(driver, dl, downloaded)
                 if rc is True:
                     break
                 if rc is None:  # 硬失败: 重登无意义, 带调试图收尾
                     save_debug(driver, os.path.join(REPO_DIR, "debug"))
                     die("下载流程硬失败 (WireGuard 页签/证书/分组; 调试图已保存到 debug/ artifact)")
-                log("SESS", f"第 {attempt} 轮达会话上限 {MAX_DL}, 重新登录继续")
+                log("SESS", f"第 {attempt}/{ROUNDS} 轮达会话上限 {MAX_DL}, 重新登录继续")
                 do_logout(driver)
-                time.sleep(120)
+                if ROUND_GAP > 0:
+                    time.sleep(ROUND_GAP)
+                if attempt >= ROUNDS:
+                    break
                 if not do_login(driver) or not goto_downloads(driver):
                     save_debug(driver, os.path.join(REPO_DIR, "debug"))
                     log("SESS", "重新登录/回下载页失败, 提前收尾 (已有库存照常合并)")

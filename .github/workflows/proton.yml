@@ -48,6 +48,9 @@ jobs:
           DOWNLOAD_SCOPE: ${{ vars.DOWNLOAD_SCOPE || 'all' }}
           MAX_DOWNLOADS_PER_SESSION: ${{ vars.MAX_DOWNLOADS_PER_SESSION || '20' }}
           PROTON_INTERVAL: ${{ vars.PROTON_INTERVAL || '5-15' }}
+          PROTON_PER_COUNTRY: ${{ vars.PROTON_PER_COUNTRY || '3' }}
+          PROTON_ROUNDS: ${{ vars.PROTON_ROUNDS || '2' }}
+          PROTON_ROUND_GAP: ${{ vars.PROTON_ROUND_GAP || '120' }}
 
       - name: Upload debug artifacts
         if: always()

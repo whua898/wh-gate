@@ -395,7 +395,7 @@ wrangler secret put GH_PAT       # 粘贴 PAT
 
 ### 第 2 步：首次下载
 
-手动触发 `ProtonVPN WireGuard Config Download`（proton.yml）一次：免费服务器 110 台左右（PL/NL/CA/RO/US/MX/NO/JP/CH/SG，每台下载随机等 60-90 秒防风控，每会话上限 20 台、超出自动重新登录续下），首跑可能 2-5 小时（workflow 超时已设为 360 分钟），之后每天只增量下载新增服务器，很快。
+手动触发 `ProtonVPN WireGuard Config Download`（proton.yml）一次：下载页免费服务器覆盖约 22 个国家/地区、200 余台（如 PL/NL/CA/RO/US/MX/NO/JP/CH/SG 等，部分为 Smart Routing 虚拟位置）；脚本**每国只取页面负载最低的 3 台**（`PROTON_PER_COUNTRY`，仓库 Variables 可调，`0` = 该国全部；合计约 60 余台，负载低的优先下载），每台下载后随机等 `PROTON_INTERVAL` 秒（默认 `5-15`）防风控，每会话上限 20 台、超出自动重新登录续下（`PROTON_ROUNDS` 轮、轮间等 `PROTON_ROUND_GAP` 秒），首跑约十几分钟，之后每天只增量下载新增服务器，很快。
 
 下载器已适配新版「创建 → 弹窗」两步流程：点「创建」后站点弹出配置弹窗（标题为服务器名，含文本/二维码页签与「关闭/下载」按钮），脚本直接提取弹窗内的配置全文落盘（提取不到再点弹窗「下载」，弹窗没出现则回退配置记录区），已创建过但未下载的服务器也会补下。
 
@@ -411,7 +411,7 @@ wrangler secret put GH_PAT       # 粘贴 PAT
 ### 限制与风险
 
 - 免费版**限 1 台设备同时在线**：订阅 URL 即你的连接位，泄露会被别人占用（处置：轮换 PROTON_SUB_NAME）。
-- 免费国家约 5 个（US/NL/JP/RO/PL，会轮换）、中速、无端口转发；免费服务器 IP 会变，要靠 proton.yml 定时重下。
+- 免费服务器覆盖约 22 个国家/地区（早期仅 US/NL/JP/RO/PL 5 国，2024 年起 Proton 大幅扩容；波兰/罗马尼亚/墨西哥/挪威等部分位置为 Smart Routing 虚拟机房，实际出口经别国中转）、中速、无端口转发；免费服务器 IP 会变，要靠 proton.yml 定时重下。
 - WG 走 UDP，现有 CheckSocks5 Worker **测不了**，改用 **UDP 半握手活性过滤**（`proton_probe.py`：构造标准 initiation 并发探测，收到 response 判活；**只剔除、不按 RTT 排序**——RUNNER 在境外机房，测出的延迟对用户无参考价值，选优仍由客户端 url-test 组完成；RUNNER 侧 UDP 被封导致全灭时自动全保留，绝不生成空结果；`PROTON_PROBE=0` 可关）。
 - 自动化批量下载属灰区：每天 1 次低频 + 随机间隔（每台下载后 `PROTON_INTERVAL` 秒，默认 `5-15`，账号被限流时经仓库 Variables 调回 `60-90`），风险低；即使账号被限，再注册专号成本很低。
 
