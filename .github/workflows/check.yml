@@ -21,7 +21,10 @@ permissions:
 
 concurrency:
   group: gate-check
-  cancel-in-progress: false
+  # 定时检测任务以后浪为准: 新 run 触发时直接取消旧 run, 避免外部定时器
+  # 每 30 分钟触发一次、单次运行又可能接近 30 分钟导致的无限排队
+  # (#201 跑不完, 后面的 run 全在 "waiting" 里等)。
+  cancel-in-progress: true
 
 jobs:
   check:

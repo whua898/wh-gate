@@ -22,3 +22,6 @@ tools/cloudflare-worker-timer/.wrangler/
 tools/cloudflare-worker-timer/node_modules/
 
 Copy
+
+# 本地 Cline MCP 自动跟随脚本, 不入库
+.cline/
