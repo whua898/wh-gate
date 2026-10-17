@@ -12,6 +12,7 @@ Secrets (环境变量):
   PROTON_PROXY               可选, 本机直连 account 站点超时时走代理 (如 http://127.0.0.1:7890)
   DOWNLOAD_SCOPE             all | first (默认 all; first 只下第一个国家, 调试用)
   MAX_DOWNLOADS_PER_SESSION  默认 20 (防风控, 与参考项目一致)
+  PROTON_INTERVAL            每台下载后的随机间隔秒数 min-max (默认 5-15; 被限流时调回 60-90)
 退出码:
   0 = 正常完成 (含 0 新增); 1 = 硬性失败 (登录失败/下载页打不开/WebDriver 异常)。
 产物不提交明文: 与仓库密文合并后重新加密写回 proton/proton_configs.enc。
@@ -51,6 +52,11 @@ ENC_KEY = _env("PROTON_ENC_KEY", "")
 PROXY = _env("PROTON_PROXY", "")
 SCOPE = os.environ.get("DOWNLOAD_SCOPE", "all").strip().lower() or "all"
 MAX_DL = max(1, int(os.environ.get("MAX_DOWNLOADS_PER_SESSION", "20") or "20"))
+# 下载间隔秒数 (min-max, 防风控)。默认 5-15s; 账号被限流/警告时调回 60-90。
+_iv = re.findall(r"\d+", os.environ.get("PROTON_INTERVAL", "5-15") or "5-15")
+IV_MIN, IV_MAX = (int(_iv[0]), int(_iv[1])) if len(_iv) >= 2 else (5, 15)
+if IV_MIN > IV_MAX:
+    IV_MIN, IV_MAX = IV_MAX, IV_MIN
 ENC_PATH = os.path.join(REPO_DIR, "proton", "proton_configs.enc")
 IDS_PATH = os.path.join(REPO_DIR, "proton", "downloaded_wg_ids.json")
 LOGIN_URL = "https://account.protonvpn.com/login"
@@ -236,7 +242,7 @@ def _legacy_downloads(driver, download_dir, downloaded_ids):
                     log("WG", f"已下载 {sid} ({got}), 本轮 {new_count}/{MAX_DL}")
                 else:
                     log("WG", f"{sid} 下载超时, 跳过")
-                time.sleep(random.randint(60, 90))  # 防风控随机间隔 (与参考项目一致)
+                time.sleep(random.randint(IV_MIN, IV_MAX))  # 防风控随机间隔 (PROTON_INTERVAL 可调)
         except Exception:
             continue
     return True
@@ -566,7 +572,7 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
             log("WG", f"[{summary}] 已创建并下载 {sid} ({got}), 本轮 {new_count}/{MAX_DL}")
         else:
             log("WG", f"{sid} 创建/下载未拿到文件, 跳过")
-        time.sleep(random.randint(60, 90))  # 防风控随机间隔 (与参考项目一致)
+        time.sleep(random.randint(IV_MIN, IV_MAX))  # 防风控随机间隔 (PROTON_INTERVAL 可调)
     return True
 
 

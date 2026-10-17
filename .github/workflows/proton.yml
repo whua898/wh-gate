@@ -47,6 +47,7 @@ jobs:
           PROTON_ENC_KEY: ${{ secrets.PROTON_ENC_KEY }}
           DOWNLOAD_SCOPE: ${{ vars.DOWNLOAD_SCOPE || 'all' }}
           MAX_DOWNLOADS_PER_SESSION: ${{ vars.MAX_DOWNLOADS_PER_SESSION || '20' }}
+          PROTON_INTERVAL: ${{ vars.PROTON_INTERVAL || '5-15' }}
 
       - name: Upload debug artifacts
         if: always()
