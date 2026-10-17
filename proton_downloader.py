@@ -374,23 +374,16 @@ def ensure_certificate(driver):
 def _modal_visible(driver):
     """配置弹窗是否开着。
 
-    判据: 二维码/文本/iframe[title='二维码'] 任一可见即视为弹窗开。
-    原实现只认「二维码」文案, Proton 改版后 tab 可能改叫「QR code」/「QR 代码」,
-    主路径整条失效 -> 走 12s timeout 兜底 (每台 24s)。现在多判据容错。"""
+    只认页面上明确显示的内容: 可见的「文本」tab 文案, 或弹窗里已渲染的 [Interface]
+    配置正文。不靠 class 名/title/iframe 等 DOM 内部标识 (改版易失效)。"""
     try:
-        xpaths = [
-            "//*[normalize-space(text())='二维码']",
-            "//*[normalize-space(text())='QR code']",
-            "//*[normalize-space(text())='QR 代码']",
-            "//iframe[@title='二维码']",
-            "//div[contains(@class,'p-modal') or contains(@class,'modal-two')]",
-        ]
-        for xp in xpaths:
-            for el in driver.find_elements(By.XPATH, xp):
+        for el in driver.find_elements(By.XPATH, "//*[normalize-space(text())='文本']"):
                 if el.is_displayed():
                     return True
     except Exception:
         pass
+    if _conf_text_visible(driver) is not None:
+        return True
     return False
 
 
