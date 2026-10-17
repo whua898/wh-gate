@@ -373,6 +373,7 @@ wrangler secret put GH_PAT       # 粘贴 PAT
 
 1. 注册一个 **ProtonVPN 免费专号**（勿用主力号；**2FA 必须关闭**，Selenium 不支持二次验证）；
 2. 仓库 **Settings → Secrets → Actions** 添加：
+
    | Secret | 值 |
    | :--- | :--- |
    | `PROTON_USER` / `PROTON_PASS` | 账号用户名、密码 |
