@@ -471,7 +471,7 @@ def _save_conf_text(download_dir, sid, text):
     return fn
 
 
-def _await_conf(driver, sid, download_dir, before, timeout=25):
+def _await_conf(driver, sid, download_dir, before, timeout=12):
     """点「创建/下载」后拿配置:
     1) 弹窗出现 -> 提取「文本」页签全文直接落盘 (不赌 Chrome 下载行为, 最稳);
     2) 提取不到 -> 切「文本」页签重试, 仍不行点弹窗「下载」;
@@ -485,11 +485,11 @@ def _await_conf(driver, sid, download_dir, before, timeout=25):
             return sorted(now - before)[0]  # 无弹窗直接落盘 (罕见但最省事)
         if time.time() - t0 >= timeout:
             break
-        time.sleep(1)
+        time.sleep(0.5)
     if _modal_visible(driver):
         found = _conf_text_visible(driver)
         if found is None and _click_outside_tr(driver, "文本", timeout=2):
-            time.sleep(1)
+            time.sleep(0.3)
             found = _conf_text_visible(driver)
         if found is not None:
             fn = _save_conf_text(download_dir, sid, found)
@@ -498,14 +498,14 @@ def _await_conf(driver, sid, download_dir, before, timeout=25):
             return fn
         if _click_outside_tr(driver, "下载", timeout=5):
             t1 = time.time()
-            while time.time() - t1 < 30:
+            while time.time() - t1 < 8:
                 now = {f for f in os.listdir(download_dir)
                        if f.lower().endswith(".conf")}
                 if now - before:
-                    time.sleep(2)  # 等文件写完
+                    time.sleep(0.5)  # 等文件写完
                     _close_conf_modal(driver)
                     return sorted(now - before)[0]
-                time.sleep(1)
+                time.sleep(0.5)
     _close_conf_modal(driver)  # 收尾: 无论成败都不留弹窗挡路
     for rec in driver.find_elements(
             By.XPATH, f"//tr[td[normalize-space(text())='{sid}']]"):
@@ -513,7 +513,7 @@ def _await_conf(driver, sid, download_dir, before, timeout=25):
             try:
                 driver.execute_script(
                     "arguments[0].scrollIntoView({block: 'center'});", db)
-                time.sleep(0.5)
+                time.sleep(0.1)
                 db.click()
             except Exception:
                 try:
@@ -522,11 +522,11 @@ def _await_conf(driver, sid, download_dir, before, timeout=25):
                     continue
             t2 = time.time()
             got = None
-            while time.time() - t2 < 30:
+            while time.time() - t2 < 8:
                 now = {f for f in os.listdir(download_dir)
                        if f.lower().endswith(".conf")}
                 if now - before:
-                    time.sleep(2)
+                    time.sleep(0.5)
                     got = sorted(now - before)[0]
                     break
                 found = _conf_text_visible(driver)
@@ -534,7 +534,7 @@ def _await_conf(driver, sid, download_dir, before, timeout=25):
                     got = _save_conf_text(download_dir, sid, found)
                     _close_conf_modal(driver)
                     break
-                time.sleep(1)
+                time.sleep(0.5)
             if got:
                 return got
     return None
@@ -579,7 +579,8 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
     except Exception as exc:
         log("WG", f"找不到 WireGuard 页签: {type(exc).__name__} (站点可能改版)")
         return None
-    time.sleep(3)
+    # WireGuard 页签点击后 React 切 tab, 0.5s 足够; 原 3s 纯浪费
+    time.sleep(0.5)
     if not ensure_certificate(driver):
         return None
     new_count = 0
@@ -600,7 +601,9 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
         load = int(m.group(1)) if m else 999
         try:
             driver.execute_script("arguments[0].open = true;", c)
-            time.sleep(1)
+            # details 展开后 DOM 立即可查 (原生 HTML 细节元素, 不是 React 重渲染),
+            # 0.2s 足够让 tr 渲染进来; 原 1s 纯浪费 (55 个分组 × 0.8s ≈ 44s 白等)
+            time.sleep(0.2)
             for r in c.find_elements(By.CSS_SELECTOR, "tr"):
                 try:
                     tds = r.find_elements(By.CSS_SELECTOR, "td")
@@ -636,7 +639,9 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
                 continue
             btn = downs[0]
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
-        time.sleep(1)
+        # scrollIntoView 完成即定位, 原 1s 防"页面还没滚到"多余 (原生 DOM 滚动同步完成)
+        time.sleep(0.2)
+        t0_click = time.time()  # 记录本机开始时刻, 用于 log 每台耗时
         before = {f for f in os.listdir(download_dir) if f.lower().endswith(".conf")}
         try:
             try:
@@ -646,12 +651,13 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
         except Exception:
             continue
         got = _await_conf(driver, sid, download_dir, before)
+        elapsed = time.time() - t0_click
         if got:
             new_count += 1
             downloaded_ids.add(sid)
-            log("WG", f"[{summary}] 已创建并下载 {sid} ({got}), 本轮 {new_count}/{MAX_DL}")
+            log("WG", f"[{summary}] 已创建并下载 {sid} ({got}), 本轮 {new_count}/{MAX_DL}, 耗时 {elapsed:.1f}s")
         else:
-            log("WG", f"{sid} 创建/下载未拿到文件, 跳过")
+            log("WG", f"{sid} 创建/下载未拿到文件, 跳过 (耗时 {elapsed:.1f}s)")
         time.sleep(random.randint(IV_MIN, IV_MAX))  # 防风控随机间隔 (PROTON_INTERVAL 可调)
     return True
 
