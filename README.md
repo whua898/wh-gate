@@ -385,7 +385,9 @@ wrangler secret put GH_PAT       # 粘贴 PAT
 
 ### 第 2 步：首次下载
 
-手动触发 `ProtonVPN WireGuard Config Download`（proton.yml）一次：免费服务器多台（每台下载随机等 60-90 秒防风控，每会话上限 20 台），首跑可能 20-40 分钟，之后每天增量下载新增服务器。
+手动触发 `ProtonVPN WireGuard Config Download`（proton.yml）一次：免费服务器 110 台左右（PL/NL/CA/RO/US/MX/NO/JP/CH/SG，每台下载随机等 60-90 秒防风控，每会话上限 20 台、超出自动重新登录续下），首跑可能 2-5 小时（workflow 超时已设为 360 分钟），之后每天只增量下载新增服务器，很快。
+
+下载器已适配新版「创建 → 弹窗」两步流程：点「创建」后站点弹出配置弹窗（标题为服务器名，含文本/二维码页签与「关闭/下载」按钮），脚本直接提取弹窗内的配置全文落盘（提取不到再点弹窗「下载」，弹窗没出现则回退配置记录区），已创建过但未下载的服务器也会补下。
 
 失败时下载 `proton-debug` artifact 看截图（`debug/page.html` + `screenshot.png`）；若停在登录页且无报错，多半是新 IP 触发验证——去本机浏览器登录一次过验证即可。
 
