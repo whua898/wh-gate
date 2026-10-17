@@ -496,30 +496,42 @@ def _await_conf(driver, sid, download_dir, before, timeout=12):
             break
         now = {f for f in os.listdir(download_dir) if f.lower().endswith(".conf")}
         if now - before:
-            return sorted(now - before)[0]  # 无弹窗直接落盘 (罕见但最省事)
+            log("WG_DEBUG", f"{sid} 无弹窗已落盘: {sorted(now-before)}")
+            return sorted(now - before)[0]
         if time.time() - t0 >= timeout:
             break
         time.sleep(0.5)
+    elapsed_wait = time.time() - t0
+    if elapsed_wait > 1:
+        log("WG_DEBUG", f"{sid} 弹窗等待 {elapsed_wait:.1f}s (超时{'>' if elapsed_wait >= timeout else '='}{timeout}s)")
+    log("WG_DEBUG", f"{sid} 弹窗等待结束 modal={_modal_visible(driver)} elapsed={elapsed_wait:.1f}s")
     if _modal_visible(driver):
         found = _conf_text_visible(driver)
+        log("WG_DEBUG", f"{sid} 弹窗已开 found={'yes' if found else 'no'}")
         if found is None and _click_outside_tr(driver, "文本", timeout=2):
             time.sleep(0.3)
             found = _conf_text_visible(driver)
+        log("WG_DEBUG", f"{sid} 切文本后 found={'yes' if found else 'no'}")
         if found is not None:
             fn = _save_conf_text(download_dir, sid, found)
             log("WG", f"{sid} 弹窗提取配置全文 -> {fn}")
             _close_conf_modal(driver)
             return fn
-        if _click_outside_tr(driver, "下载", timeout=5):
+        clicked_dl = _click_outside_tr(driver, "下载", timeout=5)
+        log("WG_DEBUG", f"{sid} 点击弹窗下载 btn={clicked_dl}")
+        if clicked_dl:
             t1 = time.time()
             while time.time() - t1 < 8:
                 now = {f for f in os.listdir(download_dir)
                        if f.lower().endswith(".conf")}
                 if now - before:
                     time.sleep(0.5)  # 等文件写完
+                    log("WG_DEBUG", f"{sid} 弹窗内已落盘 {sorted(now-before)[0]}")
                     _close_conf_modal(driver)
                     return sorted(now - before)[0]
                 time.sleep(0.5)
+        else:
+            log("WG_DEBUG", f"{sid} 弹窗无下载按钮 (已点击创建但弹窗没出现?)")
     _close_conf_modal(driver)  # 收尾: 无论成败都不留弹窗挡路
     for rec in driver.find_elements(
             By.XPATH, f"//tr[td[normalize-space(text())='{sid}']]"):
@@ -529,6 +541,7 @@ def _await_conf(driver, sid, download_dir, before, timeout=12):
                     "arguments[0].scrollIntoView({block: 'center'});", db)
                 time.sleep(0.1)
                 db.click()
+                log("WG_DEBUG", f"{sid} 记录区点击「下载」btn (total_elapsed={time.time()-t0_click:.1f}s)")
             except Exception:
                 try:
                     ActionChains(driver).move_to_element(db).click().perform()
@@ -541,6 +554,7 @@ def _await_conf(driver, sid, download_dir, before, timeout=12):
                        if f.lower().endswith(".conf")}
                 if now - before:
                     time.sleep(0.5)
+                    log("WG_DEBUG", f"{sid} 记录区已落盘 {sorted(now-before)[0]}")
                     got = sorted(now - before)[0]
                     break
                 found = _conf_text_visible(driver)
@@ -551,6 +565,7 @@ def _await_conf(driver, sid, download_dir, before, timeout=12):
                 time.sleep(0.5)
             if got:
                 return got
+    log("WG_DEBUG", f"{sid} 全部路径失败 total={time.time()-t0_click:.1f}s")
     return None
 
 
