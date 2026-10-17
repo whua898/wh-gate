@@ -46,6 +46,8 @@ SUB_NAME = _env("PROTON_SUB_NAME", "")
 PUBLISH = os.environ.get("PUBLISH_PROTON", "").strip().lower() in ("1", "true", "yes")
 PROTON_REFRESH = os.environ.get("PROTON_REFRESH", "每天").strip() or "每天"
 MTU_DEFAULT = 1280
+# 活性探测开关: 默认开; 设 PROTON_PROBE=0 关闭。RUNNER 侧 UDP 被封时自动全保留。
+PROBE_ENABLED = os.environ.get("PROTON_PROBE", "1").strip().lower() not in ("0", "false", "no")
 
 
 def _decrypt_confs_to_tmp():
@@ -290,10 +292,26 @@ def main():
     nodes = parse_confs(conf_dir)
     if not nodes:
         die("解析出 0 个 WireGuard 节点 (不生成空结果, 本次运行判定失败)")
+    if not nodes:
+        die("解析出 0 个 WireGuard 节点 (不生成空结果, 本次运行判定失败)")
     log("PROTON", f"可用节点: {len(nodes)}")
     log("PROTON", f"国家: {', '.join(sorted({n['code'] for n in nodes}))}")
+
+    # 活性过滤 (UDP 半握手; 只剔除不排序。RUNNER 异常导致全灭时自动全保留)
+    dropped = 0
+    if PROBE_ENABLED:
+        try:
+            from proton_probe import probe_and_filter
+            nodes, dropped = probe_and_filter(nodes, log)
+        except Exception as exc:
+            log("PROBE", f"探测模块异常 ({type(exc).__name__}: {exc}), 保留全部节点")
+    else:
+        log("PROBE", "已关闭 (PROTON_PROBE=0)")
+    if not nodes:
+        die("活性探测后 0 节点可用 (不生成空结果, 本次运行判定失败)")
     for p in write_outputs(nodes):
         log("WEBSITE", f"生成 {os.path.relpath(p, REPO_DIR)}")
+    log("RESULT", f"输出节点: {len(nodes)} (剔除失活 {dropped})")
 
 
 if __name__ == "__main__":

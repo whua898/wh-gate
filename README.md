@@ -379,6 +379,7 @@ wrangler secret put GH_PAT       # 粘贴 PAT
    | `PROTON_ENC_KEY` | Fernet 加密密钥（仓库 Secrets，生成后填）|
    | `PROTON_SUB_NAME` | 订阅随机文件名（泄露时换这个值即可轮换 URL）|
    | `PUBLISH_PROTON` | 设为 `1` 才发布到 Pages（默认不发布，含账户私钥）|
+   | `PROTON_PROBE` | 活性探测开关，默认 `1`（UDP 半握手只剔除轮换/下线的 Endpoint，不排序；设 `0` 关闭。选优仍靠客户端 url-test 组）|
 
 .conf 明文**绝不入库**：仓库只存 `proton/proton_configs.enc`（AES 密文）+ `proton/downloaded_wg_ids.json`（仅服务器 ID）；订阅产物也是随机文件名、不出现在任何索引页。
 
@@ -399,7 +400,7 @@ wrangler secret put GH_PAT       # 粘贴 PAT
 
 - 免费版**限 1 台设备同时在线**：订阅 URL 即你的连接位，泄露会被别人占用（处置：轮换 PROTON_SUB_NAME）。
 - 免费国家约 5 个（US/NL/JP/RO/PL，会轮换）、中速、无端口转发；免费服务器 IP 会变，要靠 proton.yml 定时重下。
-- WG 走 UDP，现有 CheckSocks5 Worker **测不了**，连通性由 mihomo/sing-box 的 url-test 组在线兜底。
+- WG 走 UDP，现有 CheckSocks5 Worker **测不了**，改用 **UDP 半握手活性过滤**（`proton_probe.py`：构造标准 initiation 并发探测，收到 response 判活；**只剔除、不按 RTT 排序**——RUNNER 在境外机房，测出的延迟对用户无参考价值，选优仍由客户端 url-test 组完成；RUNNER 侧 UDP 被封导致全灭时自动全保留，绝不生成空结果；`PROTON_PROBE=0` 可关）。
 - 自动化批量下载属灰区：每天 1 次低频 + 随机间隔，风险低；即使账号被限，再注册专号成本很低。
 
 ---
