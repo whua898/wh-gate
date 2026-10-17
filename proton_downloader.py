@@ -596,8 +596,8 @@ def main():
     if not USER or not PASSWORD:
         die("未设置 PROTON_USER / PROTON_PASS (仓库 Secrets; 账号 2FA 必须关闭)")
     if not ENC_KEY:
-        die("未设置 PROTON_ENC_KEY (先用以下命令生成后存入 Secrets: "
-            "python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\")")
+        die("未设置 PROTON_ENC_KEY (先用以下命令生成后存入 Secrets, 标准库即可无需装包: "
+            "python -c \"import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())\")")
     try:
         store = load_encrypted_store()
     except Exception as exc:

@@ -382,6 +382,18 @@ wrangler secret put GH_PAT       # 粘贴 PAT
    | `PUBLISH_PROTON` | 设为 `1` 才发布到 Pages（默认不发布，含账户私钥）|
    | `PROTON_PROBE` | 活性探测开关，默认 `1`（UDP 半握手只剔除轮换/下线的 Endpoint，不排序；设 `0` 关闭。选优仍靠客户端 url-test 组）|
 
+   两个一次性随机值这样生成（**标准库即可，无需装任何包**）：
+
+   ```bash
+   # PROTON_ENC_KEY（Fernet 密钥；生成一次后永久别换，换了旧密文库作废）
+   python -c "import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
+
+   # PROTON_SUB_NAME（订阅文件名随机串；泄露时换它即轮换订阅 URL）
+   python -c "import secrets,string; print(''.join(secrets.choice(string.ascii_lowercase+string.digits) for _ in range(20)))"
+   ```
+
+   > 生成的 `PROTON_ENC_KEY` 与 `cryptography` 的 `Fernet.generate_key()` 输出格式完全等价（32 字节随机数的 URL-safe Base64）。
+
 .conf 明文**绝不入库**：仓库只存 `proton/proton_configs.enc`（AES 密文）+ `proton/downloaded_wg_ids.json`（仅服务器 ID）；订阅产物也是随机文件名、不出现在任何索引页。
 
 ### 第 2 步：首次下载
