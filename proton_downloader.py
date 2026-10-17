@@ -627,6 +627,10 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
                         if mload:
                             row_load = int(mload.group(1))
                             break
+                    # 调试: 落空时打出行内各 td 的纯文本, 定位百分比实际在哪个 td
+                    if row_load == 999 and sid:
+                        td_texts = [td.text.strip() for td in tds]
+                        log("WG_DEBUG", f"{sid} tds={td_texts} tag={r.tag_name}")
                     by_country.setdefault(label, []).append((row_load, sid))
                 except Exception:
                     continue
