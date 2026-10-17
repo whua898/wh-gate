@@ -376,6 +376,15 @@ def _modal_visible(driver):
 
     只认页面上明确显示的内容: 可见的「文本」tab 文案, 或弹窗里已渲染的 [Interface]
     配置正文。不靠 class 名/title/iframe 等 DOM 内部标识 (改版易失效)。"""
+    # 调试: 打印当前可查的可见文本, 定位弹窗判据失败原因
+    try:
+        visible_texts = [
+            el.text.strip() for el in driver.find_elements(By.XPATH, "//body//*[contains(text(), '文本')]")
+            if el.is_displayed()
+        ]
+        log("WG_DEBUG", f"_modal_visible text='文本': {visible_texts[:5]}")
+    except Exception:
+        pass
     try:
         for el in driver.find_elements(By.XPATH, "//*[normalize-space(text())='文本']"):
                 if el.is_displayed():
