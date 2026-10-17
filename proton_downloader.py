@@ -372,11 +372,23 @@ def ensure_certificate(driver):
 
 
 def _modal_visible(driver):
-    """配置弹窗是否开着 (用「二维码」页签做判据, 只有弹窗里才有)。"""
+    """配置弹窗是否开着。
+
+    判据: 二维码/文本/iframe[title='二维码'] 任一可见即视为弹窗开。
+    原实现只认「二维码」文案, Proton 改版后 tab 可能改叫「QR code」/「QR 代码」,
+    主路径整条失效 -> 走 12s timeout 兜底 (每台 24s)。现在多判据容错。"""
     try:
-        for el in driver.find_elements(By.XPATH, "//*[normalize-space(text())='二维码']"):
-            if el.is_displayed():
-                return True
+        xpaths = [
+            "//*[normalize-space(text())='二维码']",
+            "//*[normalize-space(text())='QR code']",
+            "//*[normalize-space(text())='QR 代码']",
+            "//iframe[@title='二维码']",
+            "//div[contains(@class,'p-modal') or contains(@class,'modal-two')]",
+        ]
+        for xp in xpaths:
+            for el in driver.find_elements(By.XPATH, xp):
+                if el.is_displayed():
+                    return True
     except Exception:
         pass
     return False
@@ -597,23 +609,32 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
         except Exception:
             full = "?"
         label = full.split("\n")[0].strip() or "?"  # 如 "JP-FREE" / "荷兰"
-        m = re.search(r"(\d+)\s*%", full)  # summary 文本含负载百分比
-        load = int(m.group(1)) if m else 999
         try:
             driver.execute_script("arguments[0].open = true;", c)
             # details 展开后 DOM 立即可查 (原生 HTML 细节元素, 不是 React 重渲染),
             # 0.2s 足够让 tr 渲染进来; 原 1s 纯浪费 (55 个分组 × 0.8s ≈ 44s 白等)
             time.sleep(0.2)
+            # 行内读每台的真实负载: 遍历 tr, 台名取第 1 个 td, 负载扫描全行文本
+            # 里的 "NN%"。summary 上没带百分比 (原版 regex 全落空 -> 哨兵 999%),
+            # 所以必须从行内取; 取不到负载的台仍入队, 按 999 排最后。
             for r in c.find_elements(By.CSS_SELECTOR, "tr"):
                 try:
                     tds = r.find_elements(By.CSS_SELECTOR, "td")
                     sid = tds[0].text.strip() if tds else ""
-                    if sid:
-                        by_country.setdefault(label, []).append((load, sid))
+                    if not sid:
+                        continue
+                    row_text = r.text
+                    mload = re.search(r"(\d+)\s*%", row_text)
+                    row_load = int(mload.group(1)) if mload else 999
+                    by_country.setdefault(label, []).append((row_load, sid))
                 except Exception:
                     continue
         except Exception:
             continue
+    parsed = [it for items in by_country.values() for it in items]
+    if parsed and all(l == 999 for l, _s in parsed):
+        log("WG", "警告: 所有行都没解析出负载百分比 (Proton 可能改了页面结构), "
+                  "按原顺序取前 N 台而非最低负载")
     for label, items in by_country.items():
         kept = select_least_loaded(items, PER_COUNTRY)
         if PER_COUNTRY > 0 and len(items) > len(kept):
@@ -655,9 +676,10 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
         if got:
             new_count += 1
             downloaded_ids.add(sid)
-            log("WG", f"[{summary}] 已创建并下载 {sid} ({got}), 本轮 {new_count}/{MAX_DL}, 耗时 {elapsed:.1f}s")
+            suffix = f", 耗时 {elapsed:.1f}s" + (" (走了兜底路径, 弹窗判定可能失效)" if elapsed > 15 else "")
+            log("WG", f"[{summary}] 已创建并下载 {sid} ({got}), 本轮 {new_count}/{MAX_DL}{suffix}")
         else:
-            log("WG", f"{sid} 创建/下载未拿到文件, 跳过 (耗时 {elapsed:.1f}s)")
+            log("WG", f"{sid} 创建/下载未拿到文件, 跳过 (耗时 {elapsed:.1f}s, 弹窗判定可能失效)")
         time.sleep(random.randint(IV_MIN, IV_MAX))  # 防风控随机间隔 (PROTON_INTERVAL 可调)
     return True
 
