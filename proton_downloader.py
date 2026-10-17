@@ -34,6 +34,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
 
 from vpngate import log, die, _env, REPO_DIR
 
@@ -236,7 +237,8 @@ def _legacy_downloads(driver, download_dir, downloaded_ids):
             continue
     return True
 
-# 新流程: 「创建」配置 -> 页面下方配置记录 -> 「下载」.conf (用户实测 2026-10-17)
+# 新流程: 「创建」配置 -> 弹窗 (文本/二维码页签) 里点「下载」-> .conf 落盘 (用户实测 2026-10-17)
+# 弹窗不出现时回退到页面下方配置记录区行内「下载」。
 # 每份配置以证书名称注册; 本脚本默认单证书覆盖全部免费服务器
 # (只创建一次, 后续服务器复用同一证书, 避免免费版 key 槽被挤爆)。
 CERT_NAME = _env("PROTON_CERT_NAME", "wh-gate")
@@ -280,8 +282,196 @@ def ensure_certificate(driver):
         return False
 
 
+def _modal_visible(driver):
+    """配置弹窗是否开着 (用「二维码」页签做判据, 只有弹窗里才有)。"""
+    try:
+        for el in driver.find_elements(By.XPATH, "//*[normalize-space(text())='二维码']"):
+            if el.is_displayed():
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _conf_text_visible(driver):
+    """弹窗「文本」页签里的配置全文; 取最内层可见元素, 没有则 None。"""
+    best = None
+    try:
+        els = driver.find_elements(By.XPATH, "//*[contains(., '[Interface]')]")
+    except Exception:
+        els = []
+    for el in els:
+        try:
+            if not el.is_displayed():
+                continue
+            txt = (el.text or "").strip()
+        except Exception:
+            continue
+        if "[Interface]" in txt and "[Peer]" in txt and "PrivateKey" in txt:
+            if best is None or len(txt) < len(best):
+                best = txt
+    if best is None:  # textarea 里 .text 取不到, 读 value
+        try:
+            for ta in driver.find_elements(By.TAG_NAME, "textarea"):
+                if not ta.is_displayed():
+                    continue
+                v = (ta.get_attribute("value") or ta.text or "").strip()
+                if "[Interface]" in v and "[Peer]" in v and "PrivateKey" in v:
+                    if best is None or len(v) < len(best):
+                        best = v
+        except Exception:
+            pass
+    return best
+
+
+def _click_outside_tr(driver, text, timeout=10):
+    """点「不在表格行里」的同名按钮 (弹窗按钮; 排除配置记录区行内按钮)。"""
+    try:
+        el = WebDriverWait(driver, timeout).until(EC.element_to_be_clickable(
+            (By.XPATH, f"//*[normalize-space(text())='{text}' and not(ancestor::tr)]")))
+    except Exception:
+        return False
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
+        time.sleep(0.5)
+        el.click()
+    except Exception:
+        try:
+            ActionChains(driver).move_to_element(el).click().perform()
+        except Exception:
+            return False
+    return True
+
+
+def _close_conf_modal(driver):
+    """关掉配置弹窗 (点「关闭」; 失败发 ESC), 保证不挡下一行。"""
+    if not _modal_visible(driver):
+        return True
+    if not _click_outside_tr(driver, "关闭", timeout=3):
+        try:
+            ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        except Exception:
+            pass
+    t0 = time.time()
+    while time.time() - t0 < 8:
+        if not _modal_visible(driver):
+            return True
+        time.sleep(0.5)
+    try:
+        ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        time.sleep(1)
+    except Exception:
+        pass
+    return not _modal_visible(driver)
+
+
+def _save_conf_text(download_dir, sid, text):
+    """把弹窗里的配置全文落盘为 {sid}.conf
+    (裁掉 [Interface] 前与 Endpoint 行之后的界面残留)。"""
+    idx = text.find("[Interface]")
+    if idx > 0:
+        text = text[idx:]
+    out = []
+    for ln in text.splitlines():
+        out.append(ln)
+        if ln.strip().lower().startswith("endpoint"):
+            break
+    fn = f"{sid}.conf"
+    with open(os.path.join(download_dir, fn), "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(out).strip() + "\n")
+    return fn
+
+
+def _await_conf(driver, sid, download_dir, before, timeout=25):
+    """点「创建/下载」后拿配置:
+    1) 弹窗出现 -> 提取「文本」页签全文直接落盘 (不赌 Chrome 下载行为, 最稳);
+    2) 提取不到 -> 切「文本」页签重试, 仍不行点弹窗「下载」;
+    3) 没弹窗/都失败 -> 配置记录区行内「下载」兜底。返回 .conf 文件名或 None。"""
+    t0 = time.time()
+    while True:
+        if _modal_visible(driver):
+            break
+        now = {f for f in os.listdir(download_dir) if f.lower().endswith(".conf")}
+        if now - before:
+            return sorted(now - before)[0]  # 无弹窗直接落盘 (罕见但最省事)
+        if time.time() - t0 >= timeout:
+            break
+        time.sleep(1)
+    if _modal_visible(driver):
+        found = _conf_text_visible(driver)
+        if found is None and _click_outside_tr(driver, "文本", timeout=2):
+            time.sleep(1)
+            found = _conf_text_visible(driver)
+        if found is not None:
+            fn = _save_conf_text(download_dir, sid, found)
+            log("WG", f"{sid} 弹窗提取配置全文 -> {fn}")
+            _close_conf_modal(driver)
+            return fn
+        if _click_outside_tr(driver, "下载", timeout=5):
+            t1 = time.time()
+            while time.time() - t1 < 30:
+                now = {f for f in os.listdir(download_dir)
+                       if f.lower().endswith(".conf")}
+                if now - before:
+                    time.sleep(2)  # 等文件写完
+                    _close_conf_modal(driver)
+                    return sorted(now - before)[0]
+                time.sleep(1)
+    _close_conf_modal(driver)  # 收尾: 无论成败都不留弹窗挡路
+    for rec in driver.find_elements(
+            By.XPATH, f"//tr[td[normalize-space(text())='{sid}']]"):
+        for db in rec.find_elements(By.XPATH, ".//*[normalize-space(text())='下载']"):
+            try:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block: 'center'});", db)
+                time.sleep(0.5)
+                db.click()
+            except Exception:
+                try:
+                    ActionChains(driver).move_to_element(db).click().perform()
+                except Exception:
+                    continue
+            t2 = time.time()
+            got = None
+            while time.time() - t2 < 30:
+                now = {f for f in os.listdir(download_dir)
+                       if f.lower().endswith(".conf")}
+                if now - before:
+                    time.sleep(2)
+                    got = sorted(now - before)[0]
+                    break
+                found = _conf_text_visible(driver)
+                if found is not None:  # 记录区「下载」又拉起了弹窗
+                    got = _save_conf_text(download_dir, sid, found)
+                    _close_conf_modal(driver)
+                    break
+                time.sleep(1)
+            if got:
+                return got
+    return None
+
+
+def _find_row_btn(driver, sid):
+    """按服务器名重定位服务器行 (弹窗开合会触发 React 重渲染, 旧元素引用会失效)。"""
+    try:
+        rows = driver.find_elements(
+            By.XPATH, f"//tr[td[normalize-space(text())='{sid}']]")
+    except Exception:
+        return None
+    for r in rows:
+        try:
+            if r.find_elements(By.XPATH, ".//*[normalize-space(text())='创建']") or \
+               r.find_elements(By.XPATH, ".//*[normalize-space(text())='下载']"):
+                return r
+        except Exception:
+            continue
+    return None
+
+
 def process_wireguard_tab(driver, download_dir, downloaded_ids):
-    """新版创建->下载两步流程 (downloaded_ids 存服务器名, 如 NL-FREE#79)。"""
+    """新版创建->下载两步流程 (downloaded_ids 存服务器名, 如 NL-FREE#79)。
+    点「创建」后弹出配置弹窗 (标题=服务器名, 文本/二维码页签, 关闭/下载按钮):
+    优先提取弹窗全文直接落盘, 失败再走弹窗/记录区「下载」。"""
     try:
         _click_text(driver, "WireGuard")
     except Exception as exc:
@@ -296,7 +486,7 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
         log("WG", "未找到服务器分组 (选择器失效, 截图已备查)")
         return False
     log("WG", f"发现 {len(countries)} 个分组")
-    rows = []
+    rows = []  # (国家, 服务器名); 按名重定位, 避免弹窗重渲染后元素失效
     for c in countries:
         try:
             summary = c.find_element(By.CSS_SELECTOR, "summary").text.strip().split("\n")[0]
@@ -306,25 +496,33 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
             driver.execute_script("arguments[0].open = true;", c)
             time.sleep(1)
             for r in c.find_elements(By.CSS_SELECTOR, "tr"):
-                rows.append((summary, r))
+                try:
+                    tds = r.find_elements(By.CSS_SELECTOR, "td")
+                    sid = tds[0].text.strip() if tds else ""
+                    if sid:
+                        rows.append((summary, sid))
+                except Exception:
+                    continue
         except Exception:
             continue
     log("WG", f"共 {len(rows)} 台候选服务器")
-    for summary, row in rows:
+    for summary, sid in rows:
         if new_count >= MAX_DL:
             log("WG", f"本会话上限 {MAX_DL}, 停下 (下次增量继续)")
             return False
-        try:
-            tds = row.find_elements(By.CSS_SELECTOR, "td")
-            sid = tds[0].text.strip() if tds else ""
-        except Exception:
+        if sid in downloaded_ids:
             continue
-        if not sid or sid in downloaded_ids:
+        row = _find_row_btn(driver, sid)
+        if row is None:
             continue
         creates = row.find_elements(By.XPATH, ".//*[normalize-space(text())='创建']")
-        if not creates:
-            continue  # 已创建过的行只有「下载」; 本轮只走创建逻辑
-        btn = creates[0]
+        if creates:
+            btn = creates[0]
+        else:  # 已创建过的行只有「下载」-> 补下 (不再跳过)
+            downs = row.find_elements(By.XPATH, ".//*[normalize-space(text())='下载']")
+            if not downs:
+                continue
+            btn = downs[0]
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
         time.sleep(1)
         before = {f for f in os.listdir(download_dir) if f.lower().endswith(".conf")}
@@ -335,20 +533,7 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
                 ActionChains(driver).move_to_element(btn).click().perform()
         except Exception:
             continue
-        time.sleep(5)  # 等配置记录生成 (下方列表出现「下载」)
-        got = None
-        for rec in driver.find_elements(
-                By.XPATH, f"//tr[td[normalize-space(text())='{sid}']]"):
-            for db in rec.find_elements(By.XPATH, ".//*[normalize-space(text())='下载']"):
-                try:
-                    db.click()
-                    time.sleep(2)
-                    got = _wait_new_conf(download_dir, before)
-                    break
-                except Exception:
-                    continue
-            if got:
-                break
+        got = _await_conf(driver, sid, download_dir, before)
         if got:
             new_count += 1
             downloaded_ids.add(sid)

@@ -20,7 +20,7 @@ concurrency:
 jobs:
   download:
     runs-on: ubuntu-latest
-    timeout-minutes: 120 # 免费服务器多台, 每台下载随机等 60-90s, 首跑可能很久
+    timeout-minutes: 360 # 免费服务器多台, 每台含防风控随机等 60-90s + 弹窗处理, 首跑可能超 2 小时 (360 为 Actions 上限)
     steps:
       - name: Checkout
         uses: actions/checkout@v7
