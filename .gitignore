@@ -3,6 +3,13 @@ public/
 __pycache__/
 *.pyc
 
+# ProtonVPN: 明文 conf / 本地产物 / 调试截图, 不入库 (密文 proton_configs.enc 除外)
+proton_conf/
+downloaded_configs/
+out-local/
+debug/
+*.conf
+
 # IDE
 .idea/
 

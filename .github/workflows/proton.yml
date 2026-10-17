@@ -1,0 +1,74 @@
+name: ProtonVPN WireGuard Config Download
+
+# ⚠️ 本 workflow 只负责【下载 + 密文回写】, 不部署 Pages (避免与 check.yml 互踩)。
+#    明文 .conf 绝不入库: 与仓库 proton/proton_configs.enc 合并后重新加密写回。
+#    订阅生成由 check.yml 里的 `python protonvpn.py` 步骤在部署前完成。
+# 触发: 外部定时器 workflow_dispatch (与 check.yml 同一套外部定时器, 每天 1 次即可,
+#    频率太高会被 Proton 风控); 想恢复自带定时: 取消下面 2 行注释, 但须与外部定时器二选一。
+# schedule:
+#   - cron: "0 3 * * *"
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write # 回写 proton_configs.enc + downloaded_wg_ids.json
+
+concurrency:
+  group: gate-proton
+  cancel-in-progress: false
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120 # 免费服务器多台, 每台下载随机等 60-90s, 首跑可能很久
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # 回写 commit 需要完整历史 (pull --rebase 用)
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Setup Chrome
+        # ubuntu-latest 自带 chrome; chromedriver 由 Selenium Manager 自动匹配安装
+        uses: browser-actions/setup-chrome@v2
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Selenium 登录并下载 WireGuard 配置
+        run: python proton_downloader.py
+        env:
+          PROTON_USER: ${{ secrets.PROTON_USER }}
+          PROTON_PASS: ${{ secrets.PROTON_PASS }}
+          PROTON_ENC_KEY: ${{ secrets.PROTON_ENC_KEY }}
+          DOWNLOAD_SCOPE: ${{ vars.DOWNLOAD_SCOPE || 'all' }}
+          MAX_DOWNLOADS_PER_SESSION: ${{ vars.MAX_DOWNLOADS_PER_SESSION || '20' }}
+
+      - name: Upload debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proton-debug
+          path: debug/
+          if-no-files-found: ignore
+
+      - name: Commit encrypted configs (keep scheduled workflow alive)
+        # 只回写密文 + ID 列表 (明文不入库); 用 [skip ci] 避免触发其它 workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add proton/proton_configs.enc proton/downloaded_wg_ids.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "nothing to commit (无新增配置)"
+            exit 0
+          fi
+          git commit -m "chore: proton configs update [skip ci]"
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main && git push origin HEAD:main && break
+            echo "push 冲突, 重试 $i/5 ..."
+            sleep 10
+          done

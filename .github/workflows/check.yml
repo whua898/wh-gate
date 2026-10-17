@@ -98,6 +98,16 @@ jobs:
           # sub.txt 订阅含 UUID: 默认不发布 (PUBLISH_SUB 未设置即跳过); 需要时配 Secret EDT_UUID 并加 PUBLISH_SUB=1
           EDT_UUID: ${{ secrets.EDT_UUID }}
 
+      - name: Build ProtonVPN subscription (from encrypted .conf store)
+        # protonvpn.py 自己做发布门控: 缺 PROTON_SUB_NAME 或未设 PUBLISH_PROTON=1 即跳过,
+        # 未配置 Secrets 时同样跳过 —— 不影响上一步 VPN Gate 流程。
+        run: python protonvpn.py
+        env:
+          PROTON_ENC_KEY: ${{ secrets.PROTON_ENC_KEY }}
+          PUBLISH_PROTON: ${{ secrets.PUBLISH_PROTON }}
+          PROTON_SUB_NAME: ${{ secrets.PROTON_SUB_NAME }}
+          PROTON_REFRESH: "每天"
+
       - name: Configure Pages
         uses: actions/configure-pages@v6
 

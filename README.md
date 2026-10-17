@@ -357,3 +357,50 @@ wrangler secret put GH_PAT       # 粘贴 PAT
 ---
 *流水线：外部定时器（每 30 分钟） → GitHub Actions → vpngate.py → 检测 Worker → GitHub Pages*
 
+---
+
+## 九、ProtonVPN 免费节点订阅
+
+从 ProtonVPN **免费账户**自动提取免费 WireGuard 节点，生成 mihomo（Clash Party）完整配置、sing-box 配置、v2rayN 订阅。与 VPN Gate 链路独立，但共用同一 Pages 部署。
+
+### 原理（路线）
+
+纯调用官方 api.protonvpn.ch 的路不通：服务器列表需登录、WireGuard 密钥注册端点已下线（官方桌面端改用证书+local-agent 协议，mihomo 不支持）。本方案走 account.protonvpn.com Downloads 页（社区 Delta-Kronecker 项目已验证免费账户可用）：Selenium 登录 → 下载每台免费服务器的 .conf（自带私钥+服务器公钥+Endpoint，单文件即完整连接参数）→ 解析生成三种订阅。
+
+### 第 1 步：准备账号与 Secrets
+
+1. 注册一个 **ProtonVPN 免费专号**（勿用主力号；**2FA 必须关闭**，Selenium 不支持二次验证）；
+2. 仓库 **Settings → Secrets → Actions** 添加：
+   | Secret | 值 |
+   | :--- | :--- |
+   | `PROTON_USER` / `PROTON_PASS` | 账号用户名、密码 |
+   | `PROTON_ENC_KEY` | Fernet 加密密钥（仓库 Secrets，生成后填）|
+   | `PROTON_SUB_NAME` | 订阅随机文件名（泄露时换这个值即可轮换 URL）|
+   | `PUBLISH_PROTON` | 设为 `1` 才发布到 Pages（默认不发布，含账户私钥）|
+
+.conf 明文**绝不入库**：仓库只存 `proton/proton_configs.enc`（AES 密文）+ `proton/downloaded_wg_ids.json`（仅服务器 ID）；订阅产物也是随机文件名、不出现在任何索引页。
+
+### 第 2 步：首次下载
+
+手动触发 `ProtonVPN WireGuard Config Download`（proton.yml）一次：免费服务器多台（每台下载随机等 60-90 秒防风控，每会话上限 20 台），首跑可能 20-40 分钟，之后每天增量下载新增服务器。
+
+失败时下载 `proton-debug` artifact 看截图（`debug/page.html` + `screenshot.png`）；若停在登录页且无报错，多半是新 IP 触发验证——去本机浏览器登录一次过验证即可。
+
+### 第 3 步：订阅生效
+
+下一次外部定时器触发 check.yml 时，`Build ProtonVPN subscription` 步骤自动解密生成并随 Pages 部署。客户端：
+
+- **Clash Party / mihomo**：`https://你的Pages域名/proton-<SUB_NAME>.yaml` 直接作为配置文件导入（内含按国家分组 + AUTO url-test 自动测速组）
+- **v2rayN**：订阅分组填 `https://你的Pages域名/proton-v2ray-<SUB_NAME>.txt`（base64 的 `wireguard://` URI 列表）；或「导入 sing-box 配置」贴 `proton-sb-<SUB_NAME>.json`
+
+### 限制与风险
+
+- 免费版**限 1 台设备同时在线**：订阅 URL 即你的连接位，泄露会被别人占用（处置：轮换 PROTON_SUB_NAME）。
+- 免费国家约 5 个（US/NL/JP/RO/PL，会轮换）、中速、无端口转发；免费服务器 IP 会变，要靠 proton.yml 定时重下。
+- WG 走 UDP，现有 CheckSocks5 Worker **测不了**，连通性由 mihomo/sing-box 的 url-test 组在线兜底。
+- 自动化批量下载属灰区：每天 1 次低频 + 随机间隔，风险低；即使账号被限，再注册专号成本很低。
+
+---
+
+*流水线：外部定时器（每天）→ proton.yml（Selenium 下载 + 密文回写）→ check.yml（解密生成订阅）→ GitHub Pages*
+
