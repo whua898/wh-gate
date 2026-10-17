@@ -101,22 +101,26 @@ def save_debug(driver, where):
 
 
 def do_login(driver):
-    """两步登录; 仍在登录页 / 出现验证页则返回 False (调用方 die)。"""
-    driver.get(LOGIN_URL)
-    WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.ID, "username")))
-    time.sleep(1)
-    u = driver.find_element(By.ID, "username")
-    u.click()
-    u.send_keys(USER)
-    time.sleep(1)
-    driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
-    time.sleep(2)
-    p = WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.ID, "password")))
-    p.click()
-    p.send_keys(PASSWORD)
-    time.sleep(1)
-    driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
-    time.sleep(4)
+    """两步登录; 任何异常 (含 WebDriverWait 超时) 收敛为返回 False, 由调用方 die。"""
+    try:
+        driver.get(LOGIN_URL)
+        WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.ID, "username")))
+        time.sleep(1)
+        u = driver.find_element(By.ID, "username")
+        u.click()
+        u.send_keys(USER)
+        time.sleep(1)
+        driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
+        time.sleep(2)
+        p = WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.ID, "password")))
+        p.click()
+        p.send_keys(PASSWORD)
+        time.sleep(1)
+        driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
+        time.sleep(4)
+    except Exception as exc:
+        log("LOGIN", f"登录过程异常: {type(exc).__name__} (标题: {driver.title})")
+        return False
     url = driver.current_url.lower()
     if "login" in url:
         log("LOGIN", f"仍在登录页: {_page_error(driver)}")
@@ -244,16 +248,36 @@ def _legacy_downloads(driver, download_dir, downloaded_ids):
 CERT_NAME = _env("PROTON_CERT_NAME", "wh-gate")
 
 
-def _click_text(driver, text, timeout=20):
-    el = WebDriverWait(driver, timeout).until(EC.element_to_be_clickable(
-        (By.XPATH, f"//*[normalize-space(text())='{text}']")))
-    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
-    time.sleep(1)
-    try:
-        el.click()
-    except Exception:
-        ActionChains(driver).move_to_element(el).click().perform()
-    return el
+def _click_text(driver, text, timeout=30):
+    """按文本点可见元素。
+    element_to_be_clickable 只看首个匹配 —— 页面若有隐藏同名副本 (移动端菜单/
+    页脚链接) 会永远等不到; 这里遍历全部匹配、跳过隐藏节点, 原生 click 被挡时
+    用 JS click 兜底。找不到抛 RuntimeError (调用方收敛处理)。"""
+    xps = [
+        f"//*[normalize-space(text())='{text}']",
+        # 最内层包含匹配兜底 (排除还含同文本子节点的祖先, 避免误点 body/html)
+        f"//*[contains(normalize-space(.), '{text}') "
+        f"and not(*[contains(normalize-space(.), '{text}')])]",
+    ]
+    deadline = time.time() + timeout
+    last = "无匹配"
+    while time.time() < deadline:
+        for xp in xps:
+            for el in driver.find_elements(By.XPATH, xp):
+                try:
+                    if not el.is_displayed():
+                        continue
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
+                    time.sleep(0.5)
+                    try:
+                        el.click()
+                    except Exception:
+                        driver.execute_script("arguments[0].click();", el)
+                    return el
+                except Exception as exc:
+                    last = type(exc).__name__
+        time.sleep(2)
+    raise RuntimeError(f"{text}: {last} ({timeout}s 内未见可点元素)")
 
 
 def ensure_certificate(driver):
@@ -471,20 +495,22 @@ def _find_row_btn(driver, sid):
 def process_wireguard_tab(driver, download_dir, downloaded_ids):
     """新版创建->下载两步流程 (downloaded_ids 存服务器名, 如 NL-FREE#79)。
     点「创建」后弹出配置弹窗 (标题=服务器名, 文本/二维码页签, 关闭/下载按钮):
-    优先提取弹窗全文直接落盘, 失败再走弹窗/记录区「下载」。"""
+    优先提取弹窗全文直接落盘, 失败再走弹窗/记录区「下载」。
+    返回三态: True=全部完成; False=达会话上限 (重登可续); None=硬失败 (站点改版/
+    证书失败/分组为空 —— 重登无意义, 调用方应带调试图收尾)。"""
     try:
         _click_text(driver, "WireGuard")
     except Exception as exc:
         log("WG", f"找不到 WireGuard 页签: {type(exc).__name__} (站点可能改版)")
-        return False
+        return None
     time.sleep(3)
     if not ensure_certificate(driver):
-        return False
+        return None
     new_count = 0
     countries = driver.find_elements(By.CSS_SELECTOR, "details")
     if not countries:
-        log("WG", "未找到服务器分组 (选择器失效, 截图已备查)")
-        return False
+        log("WG", "未找到服务器分组 (选择器失效)")
+        return None
     log("WG", f"发现 {len(countries)} 个分组")
     rows = []  # (国家, 服务器名); 按名重定位, 避免弹窗重渲染后元素失效
     for c in countries:
@@ -614,15 +640,19 @@ def main():
             if not goto_downloads(driver):
                 save_debug(driver, os.path.join(REPO_DIR, "debug"))
                 die("下载页打不开 (调试图已保存到 debug/ artifact)")
-            done = False
             for attempt in (1, 2):
-                done = process_wireguard_tab(driver, dl, downloaded)
-                if done:
+                rc = process_wireguard_tab(driver, dl, downloaded)
+                if rc is True:
                     break
+                if rc is None:  # 硬失败: 重登无意义, 带调试图收尾
+                    save_debug(driver, os.path.join(REPO_DIR, "debug"))
+                    die("下载流程硬失败 (WireGuard 页签/证书/分组; 调试图已保存到 debug/ artifact)")
                 log("SESS", f"第 {attempt} 轮达会话上限 {MAX_DL}, 重新登录继续")
                 do_logout(driver)
                 time.sleep(120)
                 if not do_login(driver) or not goto_downloads(driver):
+                    save_debug(driver, os.path.join(REPO_DIR, "debug"))
+                    log("SESS", "重新登录/回下载页失败, 提前收尾 (已有库存照常合并)")
                     break
             do_logout(driver)
         finally:
