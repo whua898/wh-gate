@@ -223,6 +223,11 @@ EDGE_HOSTS = [
 ### 检测 Worker 报错
 确认 Worker 部署成功、域名填对（workflow 里的 CHECK_WORKER）、`CHECK_TOKEN` 与 Worker 的 `AUTH_PATH` 一致。浏览器直接访问带密钥的完整地址 `https://你的Worker/<密钥>/check?sstp=vpn:vpn@任意节点:端口` 看是否返回 JSON；裸地址返回 404 说明密钥路径已生效、必须带密钥访问。
 
+### 检测全部返回 429（Actions 报「Worker 全部请求异常」/ Error 1027）
+429 = Cloudflare **Error 1027**：Workers **免费版当天（UTC 日）10 万次请求额度用尽**。该额度是**账号级共享**的——同账号其它 Worker（爬虫、宽路由、Pages Functions 等）把额度耗光，检测 Worker 也会一起挂，表现为「每天固定 UTC 0 点后恢复正常、当天某时刻突然全挂」。
+
+排查：Cloudflare Dashboard → Workers & Pages → **Metrics** 看当天请求量，找出消耗大户。根治二选一：升级 Workers Paid，或把检测 Worker 拆到另一个（新的）Cloudflare 账号单独跑。本次运行会按硬性失败处理（不生成空结果），UTC 0 点重置后下一次定时触发会自动恢复。
+
 ### 后台没同步上
 先看 Actions 日志里「Push hosts.txt to edgetunnel admin」那一步：若显示「跳过：未配置 EDT_ADMIN_PASSWORD」就是 Secret 没配；若登录失败，检查密码是否为 Worker 上的 `ADMIN` 变量值、后台地址（`EDT_BASE` / `EDT_DOMAIN`）是否写对。
 
