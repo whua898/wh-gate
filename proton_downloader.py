@@ -623,9 +623,17 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
                     sid = tds[0].text.strip() if tds else ""
                     if not sid:
                         continue
-                    row_text = r.text
-                    mload = re.search(r"(\d+)\s*%", row_text)
-                    row_load = int(mload.group(1)) if mload else 999
+                    # 只从 td 里找 "NN%" (百分比在 td 文本里; 行级 r.text 会把
+                    # 台名里的 #N、按钮文案、图标文字拼进来, 把 #79 误读成 79%)
+                    row_load = 999
+                    for td in tds[1:]:
+                        try:
+                            mload = re.search(r"(\d+)\s*%", td.text)
+                        except Exception:
+                            continue
+                        if mload:
+                            row_load = int(mload.group(1))
+                            break
                     by_country.setdefault(label, []).append((row_load, sid))
                 except Exception:
                     continue
