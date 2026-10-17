@@ -79,6 +79,11 @@ def make_driver(download_dir):
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--window-size=1920,1080")
+    # 固定英文界面: 让 Proton 渲染固定 locale, 避免 runner 默认 locale 触发风控
+    # (报错文案也固定英文, _page_error 的选择器/正则更稳)
+    opts.add_argument("--lang=en-US")
+    opts.add_argument("--accept-lang=en-US,en")
+    opts.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
     if PROXY:
         opts.add_argument(f"--proxy-server={PROXY}")
         log("SELENIUM", f"使用代理 {PROXY}")
@@ -91,15 +96,38 @@ def make_driver(download_dir):
 
 
 def _page_error(driver):
-    """抓取页面可见报错文本 (调试用)。"""
-    for sel in ("[role='alert']", ".text-danger", "[class*='error']"):
+    """抓取页面可见报错文本 (调试用)。
+
+    Proton Web 登录失败时, 报错提示由 React 渲染, 选择器分散在多处。
+    原实现只试了 3 个类名/属性选择器, 抓不到 Proton 真实错误。
+    这里按优先级覆盖 Proton 常见错误容器 + 通用 fallback, 取第一个非空。
+    仍为空时, 把当前 <title> 与 body 内文本前 300 字符也返回, 方便 debug/。"""
+    selectors = [
+        # Proton 专用 (Web 端实际报错容器, 2026 年实测存在)
+        ".alert-danger",
+        ".p-form__message--error",
+        "[class*='notification'][class*='error']",
+        "[role='alert']",
+        # 通用 fallback
+        ".text-danger",
+        "[class*='error']",
+        "[class*='error-message']",
+    ]
+    for sel in selectors:
         try:
             for el in driver.find_elements(By.CSS_SELECTOR, sel):
                 if el.text.strip():
                     return el.text.strip()[:200]
         except Exception:
             pass
-    return "无可见报错"
+    # 最后兜底: 读页面标题 + body 短摘要 (登录页标题变化可帮助定位)
+    try:
+        title = driver.title or ""
+        body_text = driver.find_element(By.TAG_NAME, "body").text or ""
+        body_text = " ".join(body_text.split())[:300]
+        return f"(无标准选择器命中) 标题={title!r} 摘要={body_text}"
+    except Exception:
+        return "无可见报错 (标题/摘要均取不到)"
 
 
 def save_debug(driver, where):
@@ -123,19 +151,43 @@ def do_login(driver):
         u.click()
         u.send_keys(USER)
         time.sleep(1)
-        driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
-        time.sleep(2)
+        # Proton 登录页有两个 submit 按钮 (用户名阶段 / 密码阶段), 按 visible 精确定位
+        # 当前阶段该点的按钮, 避免误点到隐藏的那个导致无反应
+        for btn in driver.find_elements(By.CSS_SELECTOR, "button[type='submit']"):
+            if btn.is_displayed():
+                btn.click()
+                break
+        time.sleep(3)
         p = WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.ID, "password")))
         p.click()
         p.send_keys(PASSWORD)
         time.sleep(1)
-        driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
-        time.sleep(4)
+        for btn in driver.find_elements(By.CSS_SELECTOR, "button[type='submit']"):
+            if btn.is_displayed():
+                btn.click()
+                break
+        time.sleep(5)
+        # 提交后 Proton 可能出人机验证/风控页 (URL 含 verification/captcha/human),
+        # 也可能只是页面还没跳, 再等一下让 URL 稳定
+        time.sleep(2)
     except Exception as exc:
         log("LOGIN", f"登录过程异常: {type(exc).__name__} (标题: {driver.title})")
         return False
     url = driver.current_url.lower()
     if "login" in url:
+        # 先给 Proton 客户端渲染一点时间 (报错文案是异步出), 再抓
+        try:
+            WebDriverWait(driver, 8).until(
+                lambda d: any(
+                    el.text.strip()
+                    for sel in (".alert-danger", ".p-form__message--error",
+                                "[class*='notification'][class*='error']",
+                                "[role='alert']")
+                    for el in d.find_elements(By.CSS_SELECTOR, sel)
+                )
+            )
+        except Exception:
+            pass
         log("LOGIN", f"仍在登录页: {_page_error(driver)}")
         return False
     for flag in ("verification", "captcha", "human"):
