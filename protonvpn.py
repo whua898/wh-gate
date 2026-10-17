@@ -68,10 +68,18 @@ def _decrypt_confs_to_tmp():
 
 
 def _country_code_from_name(filename):
-    """从 wg 文件名提取 ISO 国家码 (如 wg-us-101... -> US), 失败返回 '??'。"""
-    for m in re.findall(r"[A-Z]{2}", os.path.basename(filename).upper()):
-        if m in COUNTRY_ZH:
-            return m
+    """从 wg 文件名提取 ISO 国家码, 失败返回 '??'。
+    优先精确规则 (CA-FREE#29 / wg-us-101), 兜底扫描时跳过 FREE 里的 FR 误配。"""
+    base = os.path.basename(filename).upper()
+    base = base[:-5] if base.endswith(".CONF") else base  # 兜底扫描剔除扩展名 (.conf 含 CO 误配)
+    for pat in (r"(?:^|[\W_])([A-Z]{2})-FREE#", r"WG-([A-Z]{2})-"):
+        m = re.search(pat, base)
+        if m and m.group(1) in COUNTRY_ZH:
+            return m.group(1)
+    for m in re.finditer(r"[A-Z]{2}", base):
+        code = m.group(0)
+        if code in COUNTRY_ZH and base[m.start():m.start() + 4] != "FREE":
+            return code
     return "??"
 
 
