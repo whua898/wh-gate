@@ -2,6 +2,8 @@
 
 自动抓取 [VPN Gate](https://www.vpngate.net/) 的 SSTP 节点，调用检测 Worker 逐个验证可用性，按国家分组（仅收录住宅 IP，非住宅场景用 ed 其他节点），生成可直接粘贴进 edgetunnel 后台的链式代理清单。**每 30 分钟自动更新一次。**
 
+> 📌 找 ProtonVPN 免费节点的订阅？→ 直接看 [九、ProtonVPN 免费节点订阅](#九protonvpn-免费节点订阅)（mihomo / Clash Party 与 v2rayN 专用，与本链路独立）
+
 > 核心价值：VPN Gate 的 SSTP 节点 30 分钟就换一批，手动测试筛选太痛苦。本仓库把它全自动了——外部定时器每 30 分钟触发一次 GitHub Actions（GitHub 自带的 `schedule` 会延迟甚至丢任务，见「八、外部定时器」），自动检测并推送进 edgetunnel 后台，你只需在客户端里更新订阅。
 
 ---
