@@ -462,9 +462,30 @@ def _find_delete_btn(cert_item):
     return None
 
 
+def _is_certificate_entry(cert_item):
+    """判断 details 元素是否为证书条目（有证书名 + 可删除）。"""
+    try:
+        summary = cert_item.find_element(By.TAG_NAME, "summary")
+        text = summary.text.strip()
+        if not text:
+            return False
+        # 过滤掉帮助/FAQ等
+        if text in ("常见问题", "帮助", "FAQ", "?", "帮助与教程", "支持"):
+            return False
+        # 检查是否有删除按钮
+        if _find_delete_btn(cert_item):
+            return True
+        # 没有删除按钮但文本像证书名（base64 或 wh-gate）
+        if re.match(r"^[A-Za-z0-9+/]{20,}={0,2}$", text) or text in ("wh-gate",):
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def purge_certificates(driver):
     """清除账户所有旧证书 (仅此一次, 用完设回 PROTON_CERT_PURGE=0)。
-    策略: 只操作页面可见的证书条目 (summary 标签), 逐个点击删除按钮。
+    策略: 只操作页面可见的证书条目，逐个点击删除按钮。
     安全: 仅在执行时生效, 不影响后续运行。
     """
     log("CERT", "开始清除所有旧证书 (PROTON_CERT_PURGE=1)")
@@ -472,27 +493,26 @@ def purge_certificates(driver):
         time.sleep(2)
         deleted = 0
         skipped = 0
-        # 查找所有包含 summary 的 details 元素 (证书条目标志)
-        cert_items = driver.find_elements(By.CSS_SELECTOR, "details summary")
-        log("CERT_DEBUG", f"找到 {len(cert_items)} 个 summary 元素")
+        # 查找所有 details 元素
+        all_details = driver.find_elements(By.TAG_NAME, "details")
+        log("CERT_DEBUG", f"找到 {len(all_details)} 个 details 元素")
 
-        for idx, summary in enumerate(cert_items):
+        # 过滤出真正的证书条目
+        cert_items = [d for d in all_details if _is_certificate_entry(d)]
+        log("CERT_DEBUG", f"其中 {len(cert_items)} 个为证书条目")
+
+        for idx, cert_item in enumerate(cert_items):
             try:
-                # 获取父级 details 元素
-                cert_item = summary.find_element(By.XPATH, ".//ancestor::details")
-                # 获取证书名称 (summary 文本)
+                # 获取证书名称
                 try:
+                    summary = cert_item.find_element(By.TAG_NAME, "summary")
                     cert_name = summary.text.strip()[:40]
                 except Exception:
                     cert_name = f"证书{idx+1}"
 
-                # 过滤掉明显的非证书条目 (如帮助、FAQ等)
-                if not cert_name or cert_name in ("常见问题", "帮助", "FAQ", "?"):
-                    continue
-
                 log("CERT_DEBUG", f"处理证书 [{idx+1}/{len(cert_items)}]: {cert_name}")
 
-                # 查找删除按钮 (多种选择器兜底)
+                # 查找删除按钮
                 delete_btn = _find_delete_btn(cert_item)
 
                 if not delete_btn:
@@ -514,15 +534,13 @@ def purge_certificates(driver):
                 # 显式等待确认对话框出现 (最多 10 秒)
                 confirm_btn = None
                 try:
-                    # 等待红色"吊销"按钮出现 (ProtonVPN 确认对话框的主操作按钮)
                     confirm_btn = WebDriverWait(driver, 10).until(
                         EC.element_to_be_clickable((By.XPATH,
                             "//button[contains(text(), '吊销') or normalize-space(text())='吊销']"))
                     )
                     log("CERT_DEBUG", f"  找到确认按钮: {confirm_btn.get_attribute('outerHTML')[:80]}")
                 except Exception as exc:
-                    log("CERT_DEBUG", f"  未找到'吊销'按钮: {type(exc).__name__}, 尝试其他选择器...")
-                    # 兜底: 查找任意可见的点击按钮
+                    log("CERT_DEBUG", f"  未找到'吊销'按钮: {type(exc).__name__}")
                     try:
                         confirms = driver.find_elements(By.XPATH,
                             "//button[normalize-space(text())='吊销' or contains(text(), '吊销') or normalize-space(text())='确认' or normalize-space(text())='确定']")
@@ -539,10 +557,9 @@ def purge_certificates(driver):
                     except Exception:
                         driver.execute_script("arguments[0].click();", confirm_btn)
                     log("CERT", f"  已确认吊销: {cert_name}")
-                    # 等待页面稳定 (删除后列表会重新渲染)
                     time.sleep(2)
                 else:
-                    log("CERT", f"  未找到确认按钮, 跳过此证书: {cert_name}")
+                    log("CERT", f"  未找到确认按钮, 跳过: {cert_name}")
 
                 deleted += 1
 
@@ -550,7 +567,7 @@ def purge_certificates(driver):
                 log("CERT_DEBUG", f"处理证书异常: {exc}")
                 continue
 
-        log("CERT", f"证书清除完成: 成功删除 {deleted} 条, 跳过 {skipped} 条 (未找到删除按钮)")
+        log("CERT", f"证书清除完成: 成功删除 {deleted} 条, 跳过 {skipped} 条")
         return deleted
     except Exception as exc:
         log("CERT", f"证书清除异常: {type(exc).__name__}: {exc}")
