@@ -460,83 +460,119 @@ def purge_certificates(driver):
             except: pass
             log("CERT_DEBUG", f"可点击元素: {len(clickable)} 个")
             
-            # 多种方式查找删除按钮 (× 图标按钮可能在 span/div/i/svg 等非 button 元素中)
+            # 从每个证书条目局部查找删除按钮 (避免全页面搜索的误匹配)
             delete_btns = []
-            try:
-                delete_btns.extend(driver.find_elements(By.XPATH,
-                    "//button[contains(@aria-label, '删除') or contains(@aria-label, '关闭') or @role='button']"))
-            except: pass
-            try:
-                # 匹配各种元素类型的 × 按钮 (分步查找避免复杂 XPath 报错)
-                for tag in ("button", "span", "div", "i", "svg", "a"):
-                    try:
-                        delete_btns.extend(driver.find_elements(By.XPATH,
-                            f"//{tag}[normalize-space(text())='×' or normalize-space(text())='x' or contains(text(), '×') or contains(text(), 'x')]"))
-                    except: pass
-            except: pass
-            try:
-                delete_btns.extend(driver.find_elements(By.XPATH,
-                    "//button[contains(text(), 'Delete') or contains(text(), '吊销')]"))
-            except: pass
-            try:
-                # 查找所有包含 × 的可点击元素 (不限于 button)
-                delete_btns.extend(driver.find_elements(By.XPATH,
-                    "//*[contains(@class, 'close') or contains(@class, 'delete') or contains(@class, 'remove') or contains(@role, 'button')]"))
-            except: pass
-            try:
-                # 通过 aria-label 查找
-                delete_btns.extend(driver.find_elements(By.XPATH,
-                    "//*[@aria-label[contains(., '删除') or contains(., '关闭') or contains(., 'Delete') or contains(., 'Close') or contains(., 'Remove')]]"))
-            except: pass
+            for container in cert_containers:
+                try:
+                    # 在证书容器内或其祖先元素内查找 × 按钮
+                    # 先尝试向上找父级容器，然后在其中查找
+                    parent = container
+                    for _ in range(10):  # 最多向上追溯 10 层
+                        try:
+                            # 在父级内查找 × 或 "吊销" 按钮
+                            btns = parent.find_elements(By.XPATH,
+                                ".//*[normalize-space(text())='×' or normalize-space(text())='x' or contains(text(), '×') or normalize-space(text())='吊销' or contains(text(), 'Delete')]")
+                            if btns:
+                                delete_btns.extend(btns)
+                                break
+                        except Exception:
+                            pass
+                        # 向上移动一层
+                        try:
+                            parent = parent.find_element(By.XPATH, "./parent::*")
+                        except Exception:
+                            break
+                except Exception:
+                    pass
+
+            # 兜底: 如果上面的方法没找到，再用全局搜索 (限制在可见区域内)
+            if not delete_btns:
+                log("CERT_DEBUG", "局部查找未找到删除按钮, 尝试全局搜索...")
+                try:
+                    for tag in ("button", "span", "div", "i", "svg", "a"):
+                        try:
+                            delete_btns.extend(driver.find_elements(By.XPATH,
+                                f"//{tag}[contains(@class, 'close') or contains(@class, 'delete') or contains(@class, 'remove') or @aria-label[contains(., '删除') or contains(., '关闭') or contains(., 'Delete')]]"))
+                        except: pass
+                except: pass
             
-            # 去重
+            # 去重并过滤掉不可见/屏幕阅读器专用元素
             unique = []
             seen_ids = set()
             for btn in delete_btns:
                 btn_id = id(btn)
-                if btn_id not in seen_ids and btn.is_displayed():
-                    seen_ids.add(btn_id)
-                    unique.append(btn)
-            
-            log("CERT_DEBUG", f"找到 {len(unique)} 个候选删除按钮")
+                if btn_id in seen_ids:
+                    continue
+                try:
+                    # 过滤 sr-only (屏幕阅读器专用) 和明显不可见的元素
+                    classes = (btn.get_attribute("class") or "").lower()
+                    if "sr-only" in classes or "visually-hidden" in classes or "hide" in classes:
+                        continue
+                    if not btn.is_displayed():
+                        continue
+                except Exception:
+                    continue
+                seen_ids.add(btn_id)
+                unique.append(btn)
+
+            log("CERT_DEBUG", f"找到 {len(unique)} 个候选删除按钮 (原始 {len(delete_btns)} 个)")
             
             if not unique:
-                # 尝试滚动页面查找更多按钮
-                log("CERT_DEBUG", "未找到删除按钮, 尝试滚动页面...")
-                driver.execute_script("window.scrollBy(0, 500);")
-                time.sleep(1)
-                # 重新查找
-                delete_btns = driver.find_elements(By.XPATH, "//button")
-                log("CERT_DEBUG", f"滚动后找到 {len(delete_btns)} 个按钮")
-                break  # 暂时退出，避免无限循环
-            
-            try:
-                btn = unique[0]
-                btn.click()
-                time.sleep(1)
-                # 等待确认
-                confirmed = False
-                try:
-                    confirms = driver.find_elements(By.XPATH,
-                        "//*[normalize-space(text())='确认'] | //*/button[normalize-space(text())='确定'] | //*/button[contains(text(), 'Delete')] | //*/span[normalize-space(text())='×']")
-                    for cb in confirms:
-                        if cb.is_displayed():
-                            cb.click()
-                            confirmed = True
-                            break
-                except:
-                    pass
-                
-                if confirmed:
-                    deleted += 1
-                    log("CERT", f"  已删除证书 ({deleted})")
-                    time.sleep(1)
-                else:
-                    deleted += 1
-                    log("CERT", f"  已删除证书 ({deleted})")
-            except Exception as exc:
-                log("CERT_DEBUG", f"删除证书异常: {exc}")
+                log("CERT", "未找到删除按钮, 退出清除循环")
                 break
+
+            # 遍历所有候选删除按钮，逐个删除
+            for idx, btn in enumerate(unique):
+                try:
+                    # 滚动到按钮可见区域
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+                    time.sleep(0.5)
+                    try:
+                        btn.click()
+                    except Exception:
+                        # 点击被拦截时，用 JS 强制点击
+                        driver.execute_script("arguments[0].click();", btn)
+                    time.sleep(1)
+                    # 等待确认对话框
+                    confirmed = False
+                    try:
+                        # 分步查找确认按钮
+                        confirms = []
+                        try:
+                            confirms.extend(driver.find_elements(By.XPATH, "//*[normalize-space(text())='确认']"))
+                        except: pass
+                        try:
+                            confirms.extend(driver.find_elements(By.XPATH, "//button[normalize-space(text())='确定']"))
+                        except: pass
+                        try:
+                            confirms.extend(driver.find_elements(By.XPATH, "//button[contains(text(), 'Delete')]"))
+                        except: pass
+                        try:
+                            confirms.extend(driver.find_elements(By.XPATH, "//span[normalize-space(text())='×']"))
+                        except: pass
+                        for cb in confirms:
+                            if cb.is_displayed():
+                                try:
+                                    cb.click()
+                                except Exception:
+                                    driver.execute_script("arguments[0].click();", cb)
+                                confirmed = True
+                                break
+                    except Exception as exc:
+                        log("CERT_DEBUG", f"确认对话框查找异常: {exc}")
+                        pass
+
+                    if confirmed:
+                        deleted += 1
+                        log("CERT", f"  已删除证书 ({deleted}/{len(unique)}): {btn.text[:40] if btn.text else '×'}")
+                    else:
+                        deleted += 1
+                        log("CERT", f"  已删除证书 ({deleted}/{len(unique)}): 无确认弹窗直接删除")
+                    time.sleep(1)
+                except Exception as exc:
+                    log("CERT_DEBUG", f"删除证书异常 ({idx}): {exc}")
+                    break
+            break  # 完成一轮后退出循环
         
         log("CERT", f"证书清除完成: 共删除 {deleted} 条")
         return deleted
