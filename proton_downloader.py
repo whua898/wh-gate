@@ -57,7 +57,8 @@ SCOPE = os.environ.get("DOWNLOAD_SCOPE", "all").strip().lower() or "all"
 MAX_DL = max(1, int(os.environ.get("MAX_DOWNLOADS_PER_SESSION", "20") or "20"))
 # 下载间隔秒数 (min-max, 防风控)。默认 5-15s; 账号被限流/警告时调回 60-90。
 _iv = re.findall(r"\d+", os.environ.get("PROTON_INTERVAL", "5-15") or "5-15")
-IV_MIN, IV_MAX = (int(_iv[0]), int(_iv[1])) if len(_iv) >= 2 else (5, 15)
+    # 默认 2-5s: 每轮只下 ~10 台, 频率不高; 如遇限流可设 PROTON_INTERVAL=10-30
+IV_MIN, IV_MAX = (int(_iv[0]), int(_iv[1])) if len(_iv) >= 2 else (2, 5)
 if IV_MIN > IV_MAX:
     IV_MIN, IV_MAX = IV_MAX, IV_MIN
 # 每国只保留负载最低 N 台 (0 = 全部); 页面服务器行自带负载百分比, 无需额外请求
@@ -500,9 +501,11 @@ def _await_conf(driver, sid, download_dir, before, timeout=12):
         log("WG_DEBUG", f"{sid} 弹窗超时 {elapsed_wait:.1f}s (> {timeout}s)")
     if _modal_visible(driver):
         found = _conf_text_visible(driver)
+        log("WG_DEBUG", f"{sid} modal_opened text_extract={time.time()-t0_click:.1f}s found={'yes' if found else 'no'}")
         if found is None and _click_outside_tr(driver, "文本", timeout=2):
             time.sleep(0.3)
             found = _conf_text_visible(driver)
+            log("WG_DEBUG", f"{sid} after_tab text_extract={time.time()-t0_click:.1f}s found={'yes' if found else 'no'}")
         if found is not None:
             fn = _save_conf_text(download_dir, sid, found)
             log("WG", f"{sid} 弹窗提取配置全文 -> {fn}")
@@ -515,10 +518,12 @@ def _await_conf(driver, sid, download_dir, before, timeout=12):
                        if f.lower().endswith(".conf")}
                 if now - before:
                     time.sleep(0.5)  # 等文件写完
+                    log("WG_DEBUG", f"{sid} 弹窗内落盘 {sorted(now-before)[0]} total={time.time()-t0_click:.1f}s")
                     _close_conf_modal(driver)
                     return sorted(now - before)[0]
                 time.sleep(0.5)
             log("WG_DEBUG", f"{sid} 弹窗下载等待 {time.time()-t1:.1f}s")
+        log("WG_DEBUG", f"{sid} modal_path_end total={time.time()-t0_click:.1f}s")
     _close_conf_modal(driver)  # 收尾: 无论成败都不留弹窗挡路
     for rec in driver.find_elements(
             By.XPATH, f"//tr[td[normalize-space(text())='{sid}']]"):
