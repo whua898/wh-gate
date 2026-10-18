@@ -1050,8 +1050,9 @@ def save_ids(ids):
 
 
 def _scan_available_ids(driver):
-    """扫描当前页面所有可见的服务器 ID，返回集合。用于清理已下线的服务器的僵尸记录。"""
-    available = set()
+    """扫描当前页面，每国只保留负载最低的 PER_COUNTRY 台，返回应保留的 ID 集合。
+    用于清理已下线或负载较高的服务器的僵尸记录，确保库存始终 <= 国家数 × PER_COUNTRY。"""
+    by_country = {}  # {country_label: [(load_pct, sid), ...]}
     try:
         driver.get(DOWNLOADS_URL)
         time.sleep(2)
@@ -1065,32 +1066,47 @@ def _scan_available_ids(driver):
                     break
         except Exception:
             pass
-        # 展开所有折叠区并收集 ID
+        # 展开所有折叠区，逐台解析 ID + 负载百分比
         details = driver.find_elements(By.CSS_SELECTOR, "details")
         for d in details:
             try:
                 summary = d.find_element(By.TAG_NAME, "summary")
-                summary_text = summary.text.strip()
-                if not summary_text:
+                label = summary.text.strip()
+                if not label:
                     continue
-                # 展开
                 driver.execute_script("arguments[0].open = true;", d)
-                time.sleep(0.1)
-                # 在表格行里找服务器 ID (第一个 <td>)
+                time.sleep(0.15)
                 for row in d.find_elements(By.CSS_SELECTOR, "tr"):
                     try:
                         tds = row.find_elements(By.CSS_SELECTOR, "td")
                         sid = tds[0].text.strip() if tds else ""
-                        if sid and "#" in sid:
-                            available.add(sid)
+                        if not sid or "#" not in sid:
+                            continue
+                        # 从 td[1:] 里扫 "NN%" (和 process_wireguard_tab 相同逻辑)
+                        row_load = 999
+                        for td in tds[1:]:
+                            try:
+                                m = re.search(r"(\d+)\s*%", td.text)
+                            except Exception:
+                                continue
+                            if m:
+                                row_load = int(m.group(1))
+                                break
+                        by_country.setdefault(label, []).append((row_load, sid))
                     except Exception:
                         continue
             except Exception:
                 continue
     except Exception as exc:
         log("CLEANUP", f"扫描可用服务器失败: {exc}")
-    log("CLEANUP", f"页面可见服务器: {len(available)} 台")
-    return available
+    # 每国只保留负载最低的 PER_COUNTRY 台
+    keep = set()
+    for label, items in by_country.items():
+        selected = select_least_loaded(items, PER_COUNTRY)
+        for _load, sid in selected:
+            keep.add(sid)
+    log("CLEANUP", f"页面每国最低负载保留 {len(keep)} 台 (共 {len(by_country)} 国, PER_COUNTRY={PER_COUNTRY})")
+    return keep
 
 # ---------------------------------------------------------------------------
 # main
@@ -1148,13 +1164,15 @@ def main():
                 store[_norm_name(fn)] = f.read()
     if not store:
         die("密文库存为空且本轮 0 下载 (什么都没拿到, 本次运行判定失败)")
-    # 清理僵尸 ID: 从历史记录中剔除页面上不再存在的服务器
+    # 清理僵尸 ID: 每国只保留负载最低的 PER_COUNTRY 台，多余的全部剔除
     try:
         live_ids = _scan_available_ids(driver)
         pruned = downloaded - live_ids
         if pruned:
-            log("CLEANUP", f"清理 {len(pruned)} 条已下线服务器的记录: {sorted(pruned)}")
-            downloaded &= live_ids
+            log("CLEANUP", f"清理 {len(pruned)} 条记录 (已下线或负载较高): {sorted(pruned)}")
+        kept = downloaded & live_ids
+        log("CLEANUP", f"清理后保留 {len(kept)} 条, 原记录 {len(downloaded)} 条")
+        downloaded = kept
     except Exception as exc:
         log("CLEANUP", f"清理失败 (不影响主流程): {exc}")
 
