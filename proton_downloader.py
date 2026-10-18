@@ -480,12 +480,14 @@ def _save_conf_text(download_dir, sid, text):
     return fn
 
 
-def _await_conf(driver, sid, download_dir, before, timeout=12):
+def _await_conf(driver, sid, download_dir, before, timeout=12, t0_click=None):
     """点「创建/下载」后拿配置:
     1) 弹窗出现 -> 提取「文本」页签全文直接落盘 (不赌 Chrome 下载行为, 最稳);
     2) 提取不到 -> 切「文本」页签重试, 仍不行点弹窗「下载」;
     3) 没弹窗/都失败 -> 配置记录区行内「下载」兜底。返回 .conf 文件名或 None。"""
     t0 = time.time()
+    if t0_click is None:
+        t0_click = t0  # 调用方没传计时起点, 用本机此刻代替
     while True:
         if _modal_visible(driver):
             break
@@ -691,7 +693,7 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
                 ActionChains(driver).move_to_element(btn).click().perform()
         except Exception:
             continue
-        got = _await_conf(driver, sid, download_dir, before)
+        got = _await_conf(driver, sid, download_dir, before, t0_click=t0_click)
         elapsed = time.time() - t0_click
         if got:
             new_count += 1
