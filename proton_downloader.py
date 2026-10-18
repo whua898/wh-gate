@@ -931,6 +931,24 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
                     continue
         except Exception:
             continue
+    # 收集本轮页面实际可见的所有服务器 ID (用于后续清理僵尸记录)
+    available_on_page = set()
+    for c in countries:
+        try:
+            driver.execute_script("arguments[0].open = true;", c)
+            time.sleep(0.15)
+            for r in c.find_elements(By.CSS_SELECTOR, "tr"):
+                try:
+                    tds = r.find_elements(By.CSS_SELECTOR, "td")
+                    sid = tds[0].text.strip() if tds else ""
+                    if sid:
+                        available_on_page.add(sid)
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    log("WG", f"页面可见服务器: {len(available_on_page)} 台")
+
     parsed = [it for items in by_country.values() for it in items]
     if parsed and all(l == 999 for l, _s in parsed):
         log("WG", "警告: 所有行都没解析出负载百分比 (Proton 可能改了页面结构), "
@@ -1030,6 +1048,50 @@ def save_ids(ids):
     with open(IDS_PATH, "w", encoding="utf-8") as f:
         json.dump(sorted(ids), f, ensure_ascii=False, indent=1)
 
+
+def _scan_available_ids(driver):
+    """扫描当前页面所有可见的服务器 ID，返回集合。用于清理已下线的服务器的僵尸记录。"""
+    available = set()
+    try:
+        driver.get(DOWNLOADS_URL)
+        time.sleep(2)
+        # 确保 WireGuard tab 可见
+        try:
+            tabs = driver.find_elements(By.CSS_SELECTOR, ".tabs a")
+            for tab in tabs:
+                if "WireGuard" in tab.text:
+                    tab.click()
+                    time.sleep(1)
+                    break
+        except Exception:
+            pass
+        # 展开所有折叠区并收集 ID
+        details = driver.find_elements(By.CSS_SELECTOR, "details")
+        for d in details:
+            try:
+                summary = d.find_element(By.TAG_NAME, "summary")
+                summary_text = summary.text.strip()
+                if not summary_text:
+                    continue
+                # 展开
+                driver.execute_script("arguments[0].open = true;", d)
+                time.sleep(0.1)
+                # 在表格行里找服务器 ID (第一个 <td>)
+                for row in d.find_elements(By.CSS_SELECTOR, "tr"):
+                    try:
+                        tds = row.find_elements(By.CSS_SELECTOR, "td")
+                        sid = tds[0].text.strip() if tds else ""
+                        if sid and "#" in sid:
+                            available.add(sid)
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+    except Exception as exc:
+        log("CLEANUP", f"扫描可用服务器失败: {exc}")
+    log("CLEANUP", f"页面可见服务器: {len(available)} 台")
+    return available
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -1086,6 +1148,16 @@ def main():
                 store[_norm_name(fn)] = f.read()
     if not store:
         die("密文库存为空且本轮 0 下载 (什么都没拿到, 本次运行判定失败)")
+    # 清理僵尸 ID: 从历史记录中剔除页面上不再存在的服务器
+    try:
+        live_ids = _scan_available_ids(driver)
+        pruned = downloaded - live_ids
+        if pruned:
+            log("CLEANUP", f"清理 {len(pruned)} 条已下线服务器的记录: {sorted(pruned)}")
+            downloaded &= live_ids
+    except Exception as exc:
+        log("CLEANUP", f"清理失败 (不影响主流程): {exc}")
+
     save_encrypted_store(store)
     save_ids(downloaded)
     log("MERGE", f"合并后库存: {len(store)} 台, 已写回 {os.path.relpath(ENC_PATH, REPO_DIR)}")
