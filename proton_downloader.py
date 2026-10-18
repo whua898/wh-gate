@@ -483,20 +483,20 @@ def _is_certificate_entry(cert_item):
 
 
 def _click_text(driver, text, timeout=30):
-        """按文本点可见元素。
+    """按文本点可见元素。
     element_to_be_clickable 只看首个匹配 —— 页面若有隐藏同名副本 (移动端菜单/
     页脚链接) 会永远等不到; 这里遍历全部匹配、跳过隐藏节点, 原生 click 被挡时
     用 JS click 兜底。找不到抛 RuntimeError (调用方收敛处理)。"""
     xps = [
-        f"//*[normalize-space(text())='{text}']",
-        # 最内层包含匹配兜底 (排除还含同文本子节点的祖先, 避免误点 body/html)
-        f"//*[contains(normalize-space(.), '{text}') "
-        f"and not(*[contains(normalize-space(.), '{text}')])]",
+    f"//*[normalize-space(text())='{text}']",
+    # 最内层包含匹配兜底 (排除还含同文本子节点的祖先, 避免误点 body/html)
+    f"//*[contains(normalize-space(.), '{text}') "
+    f"and not(*[contains(normalize-space(.), '{text}')])]",
     ]
     deadline = time.time() + timeout
     last = "无匹配"
     while time.time() < deadline:
-        for xp in xps:
+    for xp in xps:
             for el in driver.find_elements(By.XPATH, xp):
                 try:
                     if not el.is_displayed():
@@ -510,7 +510,7 @@ def _click_text(driver, text, timeout=30):
                     return el
                 except Exception as exc:
                     last = type(exc).__name__
-        time.sleep(2)
+    time.sleep(2)
     raise RuntimeError(f"{text}: {last} ({timeout}s 内未见可点元素)")
 
 
@@ -519,10 +519,10 @@ def ensure_certificate(driver):
     # 先检查当前页面是否已有该证书的条目 (证书名+过期日期)。
     # 注意: 必须在 fill_input 之前检查, 否则填进去的名字本身就会匹配。
     try:
-        src = (driver.page_source or "").lower()
-        has_name = CERT_NAME.lower() in src
-        # 宽泛匹配: "于 Oct 17, 2027 过期" (无点号) 或 "expires on ..."
-        has_expiry_cn = bool(re.search(r"于\s+\w+\s+\d{1,2},?\s*\d{4}\s+过期", src))
+    src = (driver.page_source or "").lower()
+    has_name = CERT_NAME.lower() in src
+    # 宽泛匹配: "于 Oct 17, 2027 过期" (无点号) 或 "expires on ..."
+    has_expiry_cn = bool(re.search(r"于\s+\w+\s+\d{1,2},?\s*\d{4}\s+过期", src))
         has_expiry_en = bool(re.search(r"expires?\s+(on\s+)?\w+\s+\d{1,2},?\s*\d{4}", src))
         if has_name and (has_expiry_cn or has_expiry_en):
             log("CERT", f"已存在证书 {CERT_NAME}, 跳过创建")
