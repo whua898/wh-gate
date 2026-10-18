@@ -1121,6 +1121,7 @@ def main():
                     if added:
                         log("CLEANUP", f"新增 {len(added)} 条低负载服务器记录: {sorted(added)}")
                     downloaded = live_ids
+                    reconcile_certificates(driver, len(downloaded))
                     log("CLEANUP", f"清理后保留 {len(downloaded)} 条")
                 else:
                     log("CLEANUP", "扫描失败, 跳过清理")
