@@ -558,10 +558,31 @@ def reconcile_certificates(driver, keep_count, _pass=1):
                         except Exception:
                             driver.execute_script("arguments[0].click();", _btn)
                         confirmed = True
-                        revoked += 1
-                        log("CERT", f"  已吊销: {name}")
                     except Exception as exc:
                         log("CERT_DEBUG", f"  吊销失败: {name} - {exc}")
+                if confirmed:
+                    # 点到确认按钮 ≠ 服务端真删 (前端乐观关弹窗, 后端限流可能静默丢请求)。
+                    # 必须等该行从 DOM 消失才计数; 否则记为未生效并关掉残留弹窗, 交由补吊轮处理。
+                    row_gone = False
+                    for _w in range(8):  # ~6s
+                        try:
+                            if not btn.is_displayed():
+                                row_gone = True
+                                break
+                        except Exception:
+                            row_gone = True  # stale -> 行已被移除
+                            break
+                        time.sleep(0.75)
+                    if row_gone:
+                        revoked += 1
+                        log("CERT", f"  已吊销: {name}")
+                    else:
+                        log("CERT_DEBUG", f"  确认点击未生效 (行仍在页面): {name}")
+                        try:  # 关掉可能残留的弹窗, 避免污染下一条的点击
+                            ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+                            time.sleep(0.3)
+                        except Exception:
+                            pass
                 if not confirmed:
                     try:
                         _txts = [(_b.text or "").strip() or "<空>"
