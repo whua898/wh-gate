@@ -1152,6 +1152,21 @@ def main():
                     log("SESS", "重新登录/回下载页失败, 提前收尾 (已有库存照常合并)")
                     break
             do_logout(driver)
+            # 清理僵尸 ID: 每国只保留负载最低的 PER_COUNTRY 台，多余的全部剔除
+            # 必须在 driver.quit() 之前执行，driver 关闭后无法访问页面
+            try:
+                live_ids = _scan_available_ids(driver)
+                if live_ids is None:
+                    log("CLEANUP", "扫描失败, 跳过清理, 保留现有记录")
+                else:
+                    pruned = downloaded - live_ids
+                    if pruned:
+                        log("CLEANUP", f"清理 {len(pruned)} 条记录 (已下线或负载较高): {sorted(pruned)}")
+                    kept = downloaded & live_ids
+                    log("CLEANUP", f"清理后保留 {len(kept)} 条, 原记录 {len(downloaded)} 条")
+                    downloaded = kept
+            except Exception as exc:
+                log("CLEANUP", f"清理失败 (不影响主流程): {exc}")
         finally:
             try:
                 driver.quit()
@@ -1165,21 +1180,6 @@ def main():
                 store[_norm_name(fn)] = f.read()
     if not store:
         die("密文库存为空且本轮 0 下载 (什么都没拿到, 本次运行判定失败)")
-    # 清理僵尸 ID: 每国只保留负载最低的 PER_COUNTRY 台，多余的全部剔除
-    try:
-        live_ids = _scan_available_ids(driver)
-        if live_ids is None:
-            log("CLEANUP", "扫描失败, 跳过清理, 保留现有记录")
-        else:
-            pruned = downloaded - live_ids
-            if pruned:
-                log("CLEANUP", f"清理 {len(pruned)} 条记录 (已下线或负载较高): {sorted(pruned)}")
-            kept = downloaded & live_ids
-            log("CLEANUP", f"清理后保留 {len(kept)} 条, 原记录 {len(downloaded)} 条")
-            downloaded = kept
-    except Exception as exc:
-        log("CLEANUP", f"清理失败 (不影响主流程): {exc}")
-
     save_encrypted_store(store)
     save_ids(downloaded)
     log("MERGE", f"合并后库存: {len(store)} 台, 已写回 {os.path.relpath(ENC_PATH, REPO_DIR)}")
