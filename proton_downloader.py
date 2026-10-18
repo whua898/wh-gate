@@ -421,9 +421,56 @@ def reconcile_certificates(driver, keep_count):
             pass
         time.sleep(0.5)
 
-        # 收集所有可删除的证书条目
+        # 只认两标题之间的已创建配置: “这些配置适用于 ...” ~ “为需要生成的配置文件设置名称”
+        start_el = None
+        end_el = None
+        try:
+            _starts = driver.find_elements(By.XPATH, "//*[contains(normalize-space(.), '这些配置适用于')]")
+            _ends = driver.find_elements(By.XPATH, "//*[contains(normalize-space(.), '为需要生成的配置文件设置名称')]")
+            for _e in _starts:
+                try:
+                    if _e.is_displayed():
+                        start_el = _e
+                        break
+                except Exception:
+                    continue
+            if start_el is None and _starts:
+                start_el = _starts[0]
+            for _e in _ends:
+                try:
+                    if _e.is_displayed():
+                        end_el = _e
+                        break
+                except Exception:
+                    continue
+            if end_el is None and _ends:
+                end_el = _ends[0]
+        except Exception:
+            start_el, end_el = None, None
+        all_details = driver.find_elements(By.TAG_NAME, "details")
+        ranged = []
+        if start_el is not None and end_el is not None:
+            for d in all_details:
+                try:
+                    _in = driver.execute_script(
+                        "var s=arguments[0],e=arguments[1],d=arguments[2];"
+                        "if(!s||!e||!d) return false;"
+                        "var sBeforeD=(s.compareDocumentPosition(d)&4)!==0;"
+                        "var dBeforeE=(d.compareDocumentPosition(e)&4)!==0;"
+                        "return sBeforeD && dBeforeE;",
+                        start_el, end_el, d)
+                    if _in:
+                        ranged.append(d)
+                except Exception:
+                    continue
+            log("CERT", f"证书区范围: details 共 {len(all_details)} 个, 范围内 {len(ranged)} 个")
+        else:
+            log("CERT", "未找到证书区起止标题, 回退为全页 details")
+            ranged = all_details
+
+        # 收集范围内可删除的证书条目
         certs = []
-        for d in driver.find_elements(By.TAG_NAME, "details"):
+        for d in ranged:
             try:
                 summary = d.find_element(By.TAG_NAME, "summary")
                 name = summary.text.strip()[:60]
