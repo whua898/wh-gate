@@ -53,6 +53,8 @@ jobs:
           PROTON_PER_COUNTRY: ${{ vars.PROTON_PER_COUNTRY || '1' }}
           PROTON_ROUNDS: ${{ vars.PROTON_ROUNDS || '2' }}
           PROTON_ROUND_GAP: ${{ vars.PROTON_ROUND_GAP || '120' }}
+          # 同名证书重复副本 GC (吊销确认已修复, 默认开启; 想关掉设 vars.PROTON_CERT_GC=0)
+          PROTON_CERT_GC: ${{ vars.PROTON_CERT_GC || '1' }}
 
       - name: Upload debug artifacts
         if: always()
