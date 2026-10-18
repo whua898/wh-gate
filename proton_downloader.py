@@ -517,50 +517,49 @@ def reconcile_certificates(driver, keep_count):
                     btn.click()
                 except Exception:
                     driver.execute_script("arguments[0].click();", btn)
-                # 确认对话框: “吊销”确认按钮与证书行内按钮同文案，必须排除 certs 已知按钮，
-                # 且对话框按钮优先（祖先链无 details/summary）。先显式等 10s 再点。
+                # Dialog confirm: the in-row "x" button also contains an sr-only
+                # span with the revoke label, and the dialog button label lives in
+                # a <span> too -- normalize-space(text()) never matches either, so
+                # switch to normalize-space(.) and skip row buttons (inside details).
                 confirmed = False
-                known_ids = {getattr(b, "_id", None) for _, b in certs}
-                try:
-                    WebDriverWait(driver, 10).until(
-                        lambda d: any(
-                            True for _b in d.find_elements(
-                                By.XPATH, "//button[normalize-space(text())='吊销']")
-                            if getattr(_b, "_id", None) not in known_ids
-                        )
-                    )
-                except Exception:
-                    pass
-                for _att in range(3):
+                _revoke = "吊销"
+                _btn = None
+                for _att in range(10):  # ~10s total
                     try:
-                        _all = driver.find_elements(By.XPATH, "//button[normalize-space(text())='吊销']")
-                        btns = [_b for _b in _all if getattr(_b, "_id", None) not in known_ids]
-                        if not btns:
-                            # 回退：已知按钮之外没有时，说明对话框没出来，继续等
-                            raise RuntimeError("no dialog button yet")
-
-                        def _is_dialog(_b):
-                            try:
-                                _b.find_element(By.XPATH, "./ancestor::details")
-                                return False
-                            except Exception:
-                                return True
-                        _dlg = [_b for _b in btns if _is_dialog(_b)]
-                        b = _dlg[0] if _dlg else btns[-1]
-                        if btns:
-                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", b)
-                            time.sleep(0.2)
-                            try:
-                                b.click()
-                            except Exception:
-                                driver.execute_script("arguments[0].click();", b)
-                            confirmed = True
-                            revoked += 1
-                            log("CERT", f"  \u5df2吊销: {name}")
-                            break
+                        _all = driver.find_elements(
+                            By.XPATH, "//button[normalize-space(.)='%s']" % _revoke)
                     except Exception:
-                        pass
+                        _all = []
+                    _cand = []
+                    for _b in _all:
+                        try:
+                            if not _b.is_displayed():
+                                continue
+                        except Exception:
+                            continue
+                        try:
+                            _b.find_element(By.XPATH, "./ancestor::details")
+                            continue  # in-row revoke button, skip
+                        except Exception:
+                            pass
+                        _cand.append(_b)
+                    if _cand:
+                        _btn = _cand[0]
+                        break
                     time.sleep(1)
+                if _btn is not None:
+                    try:
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", _btn)
+                        time.sleep(0.2)
+                        try:
+                            _btn.click()
+                        except Exception:
+                            driver.execute_script("arguments[0].click();", _btn)
+                        confirmed = True
+                        revoked += 1
+                        log("CERT", f"  已吊销: {name}")
+                    except Exception as exc:
+                        log("CERT_DEBUG", f"  吊销失败: {name} - {exc}")
                 if not confirmed:
                     try:
                         _txts = [(_b.text or "").strip() or "<空>"
@@ -1230,12 +1229,13 @@ def main():
                     save_debug(driver, os.path.join(REPO_DIR, "debug"))
                     log("SESS", "重新登录/回下载页失败, 提前收尾 (已有库存照常合并)")
                     break
-            do_logout(driver)
         finally:
-            # 清理必须在 driver.quit() 之前执行
+            # 清理必须在 do_logout/driver.quit() 之前执行 —— 登出后页面失效,
+            # _scan_available_ids 扫到 0 国返回空集, 曾导致 downloaded 被清空、
+            # reconcile(0) 使证书永不吊销。空集视同扫描异常, 保留本轮 downloaded。
             try:
                 live_ids = _scan_available_ids(driver)
-                if live_ids is not None:
+                if live_ids:
                     pruned = downloaded - live_ids
                     if pruned:
                         log("CLEANUP", f"清理 {len(pruned)} 条记录 (已下线或负载较高): {sorted(pruned)}")
@@ -1243,12 +1243,19 @@ def main():
                     if added:
                         log("CLEANUP", f"新增 {len(added)} 条低负载服务器记录: {sorted(added)}")
                     downloaded = live_ids
+                elif live_ids is not None:
+                    log("CLEANUP", "扫描到 0 台 (页面状态异常?), 保留本轮 downloaded 继续吊销")
+                if downloaded:
                     reconcile_certificates(driver, len(downloaded))
                     log("CLEANUP", f"清理后保留 {len(downloaded)} 条")
                 else:
-                    log("CLEANUP", "扫描失败, 跳过清理")
+                    log("CLEANUP", "无可用记录, 跳过证书吊销")
             except Exception as exc:
                 log("CLEANUP", f"清理失败 (不影响主流程): {exc}")
+            try:
+                do_logout(driver)
+            except Exception:
+                pass
             try:
                 driver.quit()
             except Exception:
@@ -1271,7 +1278,10 @@ def main():
             log("CLEANUP", f"同步裁剪加密库存: 移除 {removed} 条已下线/高负载服务器的配置")
         store = pruned_store
     save_encrypted_store(store)
-    save_ids(downloaded)
+    if downloaded:
+        save_ids(downloaded)
+    else:
+        log("MERGE", "downloaded 为空, 保留已记录 ID 不覆盖")
     log("MERGE", f"合并后库存: {len(store)} 台, 已写回 {os.path.relpath(ENC_PATH, REPO_DIR)}")
 
 
