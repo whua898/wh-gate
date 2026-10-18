@@ -500,7 +500,8 @@ def reconcile_certificates(driver, keep_count, _pass=1):
 
         # 具名常驻证书 (wh-gate) 永不吊销: 它创建得早, 反转方向后位于头部会被误杀,
         # 下轮 ensure_certificate 又重建, 反复横跳。也不计入裁剪基数。
-        certs = [c for c in certs if c[0] != CERT_NAME]
+        # summary.text 可能是多行 (wh-gate 行会带"于 xx 过期/吊销"), 只比首行。
+        certs = [c for c in certs if c[0].splitlines()[0].strip() != CERT_NAME]
         total = len(certs)
         if keep_count <= 0 and total > 0:
             log("CERT", f"保留数为 0 但页面有 {total} 台证书 (判定扫描异常), 跳过吊销以防误清空")
