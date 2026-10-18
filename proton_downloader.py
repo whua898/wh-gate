@@ -312,6 +312,88 @@ def _legacy_downloads(driver, download_dir, downloaded_ids):
 # 每份配置以证书名称注册; 本脚本默认单证书覆盖全部免费服务器
 # (只创建一次, 后续服务器复用同一证书, 避免免费版 key 槽被挤爆)。
 CERT_NAME = _env("PROTON_CERT_NAME", "wh-gate")
+PROTON_CERT_GC = os.environ.get("PROTON_CERT_GC", "0").strip().lower() in ("1", "true", "yes")
+
+
+def gc_certificates(driver):
+    """清理同名证书的多余副本, 只保留过期日期最晚的那一个。
+
+    安全开关: PROTON_CERT_GC=1 才启用, 默认关闭 (避免误吊销活跃证书)。
+    策略: 扫描页面所有证书条目, 按名分组; 同名的只留过期最晚的, 其余点「吊销」。
+    """
+    if not PROTON_CERT_GC:
+        log("CERT", "证书清理已关闭 (PROTON_CERT_GC=0), 跳过")
+        return 0
+    try:
+        pattern = re.compile(r"于\s+(\w{3}\.)\s+(\d{1,2}),\s+(\d{4})\s+过期")
+        rows = driver.find_elements(By.XPATH,
+            f"//*[normalize-space(text())='{CERT_NAME}' and contains(., '过期')]")
+        if not rows:
+            log("CERT", f"证书清理: 未找到含 '{CERT_NAME}' 的证书条目, 跳过")
+            return 0
+        entries = []
+        for row in rows:
+            try:
+                text = row.text
+                m = pattern.search(text)
+                if not m:
+                    continue
+                month, day, year = m.group(1), m.group(2), m.group(3)
+                revoke_btn = None
+                try:
+                    revoke_candidates = row.find_elements(By.XPATH,
+                        ".//*[normalize-space(text())='吊销']")
+                    if revoke_candidates:
+                        revoke_btn = revoke_candidates[0]
+                except Exception:
+                    pass
+                if not revoke_btn:
+                    try:
+                        revoke_btn = driver.find_element(By.XPATH,
+                            f"(//*[normalize-space(text())='吊销'])[last()]")
+                    except Exception:
+                        pass
+                if revoke_btn and m:
+                    from datetime import datetime
+                    try:
+                        dt = datetime.strptime(f"{year} {month} {day}", "%Y %b. %d")
+                    except ValueError:
+                        dt = datetime(2000, 1, 1)
+                    entries.append((dt, revoke_btn, text[:80]))
+            except Exception as exc:
+                log("CERT_DEBUG", f"证书清理解析行失败: {exc}")
+        if len(entries) <= 1:
+            log("CERT", f"证书清理: 仅有 {len(entries)} 条 '{CERT_NAME}' 证书, 无需清理")
+            return 0
+        entries.sort(key=lambda e: e[0], reverse=True)
+        keep, to_revoke = entries[0], entries[1:]
+        log("CERT", f"证书清理: 发现 {len(entries)} 条 '{CERT_NAME}', 保留过期最晚的, 吊销 {len(to_revoke)} 条")
+        revoked = 0
+        for dt, btn, preview in to_revoke:
+            try:
+                btn.click()
+                time.sleep(1)
+                confirm_btns = driver.find_elements(By.XPATH,
+                    "//*[normalize-space(text())='确认'] | //*/button[normalize-space(text())='确定'] | //*/button[normalize-space(text())='吊销']")
+                confirmed = False
+                for cb in confirm_btns:
+                    if cb.is_displayed():
+                        cb.click()
+                        confirmed = True
+                        break
+                if confirmed:
+                    revoked += 1
+                    log("CERT", f"  已吊销: {preview} (到期 {dt.strftime('%Y-%m-%d')})")
+                else:
+                    log("CERT", f"  吊销确认失败 (未找到确认按钮): {preview}")
+                time.sleep(0.5)
+            except Exception as exc:
+                log("CERT_DEBUG", f"  吊销异常: {preview} - {exc}")
+        log("CERT", f"证书清理完成: 成功吊销 {revoked}/{len(to_revoke)} 条")
+        return revoked
+    except Exception as exc:
+        log("CERT", f"证书清理异常: {type(exc).__name__}: {exc}")
+        return 0
 
 
 def _click_text(driver, text, timeout=30):
@@ -620,6 +702,7 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
     time.sleep(0.5)
     if not ensure_certificate(driver):
         return None
+    gc_certificates(driver)  # 清理同名多余证书 (需 PROTON_CERT_GC=1)
     new_count = 0
     countries = driver.find_elements(By.CSS_SELECTOR, "details")
     if not countries:
