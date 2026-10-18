@@ -1162,9 +1162,11 @@ def main():
                     pruned = downloaded - live_ids
                     if pruned:
                         log("CLEANUP", f"清理 {len(pruned)} 条记录 (已下线或负载较高): {sorted(pruned)}")
-                    kept = downloaded & live_ids
-                    log("CLEANUP", f"清理后保留 {len(kept)} 条, 原记录 {len(downloaded)} 条")
-                    downloaded = kept
+                    added = live_ids - downloaded
+                    if added:
+                        log("CLEANUP", f"新增 {len(added)} 条低负载服务器记录: {sorted(added)}")
+                    downloaded = live_ids  # 直接用页面当前最低负载名单，确保库存始终 = 国家数 x PER_COUNTRY
+                    log("CLEANUP", f"清理后保留 {len(downloaded)} 条, 原记录 {len(download)} 条")
             except Exception as exc:
                 log("CLEANUP", f"清理失败 (不影响主流程): {exc}")
         finally:
