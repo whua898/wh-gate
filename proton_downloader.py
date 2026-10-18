@@ -425,12 +425,21 @@ def reconcile_certificates(driver, keep_count):
         certs = []
         for d in driver.find_elements(By.TAG_NAME, "details"):
             try:
-                if _is_certificate_entry(d):
-                    summary = d.find_element(By.TAG_NAME, "summary")
-                    name = summary.text.strip()[:60]
-                    delete_btn = _find_delete_btn(d)
-                    if delete_btn:
-                        certs.append((name, delete_btn))
+                summary = d.find_element(By.TAG_NAME, "summary")
+                name = summary.text.strip()[:60]
+                if not name:
+                    continue
+                # Expand cert row and scroll into view
+                try:
+                    summary.click()
+                    time.sleep(0.15)
+                except Exception:
+                    pass
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", d)
+                time.sleep(0.1)
+                delete_btn = _find_delete_btn(d)
+                if delete_btn:
+                    certs.append((name, delete_btn))
             except Exception:
                 continue
 
