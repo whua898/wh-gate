@@ -413,51 +413,91 @@ def gc_certificates(driver):
         return 0
 
 
+def _find_delete_btn(cert_item):
+    """在单个证书条目内查找删除按钮，支持多种 HTML 结构。"""
+    # 方式 1: 标准类名
+    try:
+        delete_btns = cert_item.find_elements(By.CSS_SELECTOR, "button.label-stack-item-delete")
+        if delete_btns:
+            return delete_btns[0]
+    except Exception:
+        pass
+    # 方式 2: title 属性含"吊销"
+    try:
+        btn = cert_item.find_element(By.XPATH, ".//button[contains(@title, '吊销')]")
+        return btn
+    except Exception:
+        pass
+    # 方式 3: 按钮文本直接含"吊销"
+    try:
+        btns = cert_item.find_elements(By.XPATH, ".//button[normalize-space(text())='吊销']")
+        if btns:
+            return btns[0]
+    except Exception:
+        pass
+    # 方式 4: SVG 图标删除按钮 (aria-label 含删除/吊销)
+    try:
+        btns = cert_item.find_elements(By.XPATH,
+            ".//button[contains(@aria-label, '删除') or contains(@aria-label, '吊销')]")
+        if btns:
+            return btns[0]
+    except Exception:
+        pass
+    # 方式 5: 带 X 图标的删除按钮
+    try:
+        btns = cert_item.find_elements(By.XPATH,
+            ".//button[contains(@class, 'delete') or contains(@class, 'remove')]")
+        if btns:
+            return btns[0]
+    except Exception:
+        pass
+    # 方式 6: 任意可见的 SVG 删除图标
+    try:
+        btns = cert_item.find_elements(By.XPATH,
+            ".//button[.//svg[contains(@class, 'delete') or contains(@class, 'trash') or contains(@class, 'x')]]")
+        if btns:
+            return btns[0]
+    except Exception:
+        pass
+    return None
+
+
 def purge_certificates(driver):
     """清除账户所有旧证书 (仅此一次, 用完设回 PROTON_CERT_PURGE=0)。
-    策略: 遍历所有 details 元素 (每个证书条目), 逐个点击删除按钮。
+    策略: 只操作页面可见的证书条目 (summary 标签), 逐个点击删除按钮。
     安全: 仅在执行时生效, 不影响后续运行。
     """
     log("CERT", "开始清除所有旧证书 (PROTON_CERT_PURGE=1)")
     try:
         time.sleep(2)
         deleted = 0
-        # 查找所有 details 元素 (每个证书条目是一个 details)
-        cert_items = driver.find_elements(By.TAG_NAME, "details")
-        log("CERT_DEBUG", f"找到 {len(cert_items)} 个证书条目 (details)")
+        skipped = 0
+        # 查找所有包含 summary 的 details 元素 (证书条目标志)
+        cert_items = driver.find_elements(By.CSS_SELECTOR, "details summary")
+        log("CERT_DEBUG", f"找到 {len(cert_items)} 个 summary 元素")
 
-        for idx, cert_item in enumerate(cert_items):
+        for idx, summary in enumerate(cert_items):
             try:
-                # 获取证书名称 (在 summary > div > div > div 中)
+                # 获取父级 details 元素
+                cert_item = summary.find_element(By.XPATH, ".//ancestor::details")
+                # 获取证书名称 (summary 文本)
                 try:
-                    name_el = cert_item.find_element(By.XPATH,
-                        ".//summary//div[contains(@class, 'text-ellipsis')]")
-                    cert_name = name_el.text.strip()
+                    cert_name = summary.text.strip()[:40]
                 except Exception:
                     cert_name = f"证书{idx+1}"
 
-                log("CERT_DEBUG", f"处理证书 [{idx+1}/{len(cert_items)}]: {cert_name[:40]}")
+                # 过滤掉明显的非证书条目 (如帮助、FAQ等)
+                if not cert_name or cert_name in ("常见问题", "帮助", "FAQ", "?"):
+                    continue
 
-                # 查找删除按钮 (类名 label-stack-item-delete)
-                delete_btn = None
-                try:
-                    delete_btns = cert_item.find_elements(By.CSS_SELECTOR,
-                        "button.label-stack-item-delete")
-                    if delete_btns:
-                        delete_btn = delete_btns[0]
-                except Exception:
-                    pass
+                log("CERT_DEBUG", f"处理证书 [{idx+1}/{len(cert_items)}]: {cert_name}")
 
-                # 兜底: 通过 title 包含"吊销"查找
-                if not delete_btn:
-                    try:
-                        delete_btn = cert_item.find_element(By.XPATH,
-                            ".//button[contains(@title, '吊销')]")
-                    except Exception:
-                        pass
+                # 查找删除按钮 (多种选择器兜底)
+                delete_btn = _find_delete_btn(cert_item)
 
                 if not delete_btn:
                     log("CERT_DEBUG", f"  未找到删除按钮, 跳过")
+                    skipped += 1
                     continue
 
                 # 滚动到按钮可见区域
@@ -469,53 +509,48 @@ def purge_certificates(driver):
                     delete_btn.click()
                 except Exception:
                     driver.execute_script("arguments[0].click();", delete_btn)
-                time.sleep(1)
+                log("CERT_DEBUG", f"  已点击删除按钮, 等待确认对话框...")
 
-                # 等待确认对话框
-                confirmed = False
+                # 显式等待确认对话框出现 (最多 10 秒)
+                confirm_btn = None
                 try:
-                    confirms = []
-                    try:
-                        confirms.extend(driver.find_elements(By.XPATH,
-                            "//*[normalize-space(text())='确认']"))
-                    except: pass
-                    try:
-                        confirms.extend(driver.find_elements(By.XPATH,
-                            "//button[normalize-space(text())='确定']"))
-                    except: pass
-                    try:
-                        confirms.extend(driver.find_elements(By.XPATH,
-                            "//button[contains(text(), 'Delete')]"))
-                    except: pass
-                    try:
-                        confirms.extend(driver.find_elements(By.XPATH,
-                            "//button[contains(text(), '吊销')]"))
-                    except: pass
-
-                    for cb in confirms:
-                        if cb.is_displayed():
-                            try:
-                                cb.click()
-                            except Exception:
-                                driver.execute_script("arguments[0].click();", cb)
-                            confirmed = True
-                            break
+                    # 等待红色"吊销"按钮出现 (ProtonVPN 确认对话框的主操作按钮)
+                    confirm_btn = WebDriverWait(driver, 10).until(
+                        EC.element_to_be_clickable((By.XPATH,
+                            "//button[contains(text(), '吊销') or normalize-space(text())='吊销']"))
+                    )
+                    log("CERT_DEBUG", f"  找到确认按钮: {confirm_btn.get_attribute('outerHTML')[:80]}")
                 except Exception as exc:
-                    log("CERT_DEBUG", f"确认对话框查找异常: {exc}")
-                    pass
+                    log("CERT_DEBUG", f"  未找到'吊销'按钮: {type(exc).__name__}, 尝试其他选择器...")
+                    # 兜底: 查找任意可见的点击按钮
+                    try:
+                        confirms = driver.find_elements(By.XPATH,
+                            "//button[normalize-space(text())='吊销' or contains(text(), '吊销') or normalize-space(text())='确认' or normalize-space(text())='确定']")
+                        for cb in confirms:
+                            if cb.is_displayed():
+                                confirm_btn = cb
+                                break
+                    except Exception:
+                        pass
+
+                if confirm_btn:
+                    try:
+                        confirm_btn.click()
+                    except Exception:
+                        driver.execute_script("arguments[0].click();", confirm_btn)
+                    log("CERT", f"  已确认吊销: {cert_name}")
+                    # 等待页面稳定 (删除后列表会重新渲染)
+                    time.sleep(2)
+                else:
+                    log("CERT", f"  未找到确认按钮, 跳过此证书: {cert_name}")
 
                 deleted += 1
-                if confirmed:
-                    log("CERT", f"  已删除证书 ({deleted}): {cert_name[:40]}")
-                else:
-                    log("CERT", f"  已删除证书 ({deleted}): {cert_name[:40]} (无确认弹窗)")
-                time.sleep(1)
 
             except Exception as exc:
                 log("CERT_DEBUG", f"处理证书异常: {exc}")
                 continue
 
-        log("CERT", f"证书清除完成: 共删除 {deleted} 条")
+        log("CERT", f"证书清除完成: 成功删除 {deleted} 条, 跳过 {skipped} 条 (未找到删除按钮)")
         return deleted
     except Exception as exc:
         log("CERT", f"证书清除异常: {type(exc).__name__}: {exc}")
