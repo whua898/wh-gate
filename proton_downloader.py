@@ -499,6 +499,9 @@ def reconcile_certificates(driver, keep_count):
                 continue
 
         total = len(certs)
+        if keep_count <= 0 and total > 0:
+            log("CERT", f"保留数为 0 但页面有 {total} 台证书 (判定扫描异常), 跳过吊销以防误清空")
+            return 0
         if total <= keep_count:
             log("CERT", f"证书 {total} 台 <= 库存 {keep_count} 台, 无需清理")
             return 0
@@ -514,13 +517,37 @@ def reconcile_certificates(driver, keep_count):
                     btn.click()
                 except Exception:
                     driver.execute_script("arguments[0].click();", btn)
-                # Retry 3 times for revoke confirmation dialog
+                # 确认对话框: “吊销”确认按钮与证书行内按钮同文案，必须排除 certs 已知按钮，
+                # 且对话框按钮优先（祖先链无 details/summary）。先显式等 10s 再点。
                 confirmed = False
+                known_ids = {getattr(b, "_id", None) for _, b in certs}
+                try:
+                    WebDriverWait(driver, 10).until(
+                        lambda d: any(
+                            True for _b in d.find_elements(
+                                By.XPATH, "//button[normalize-space(text())='吊销']")
+                            if getattr(_b, "_id", None) not in known_ids
+                        )
+                    )
+                except Exception:
+                    pass
                 for _att in range(3):
                     try:
-                        btns = driver.find_elements(By.XPATH, "//button[normalize-space(text())='吊销']")
+                        _all = driver.find_elements(By.XPATH, "//button[normalize-space(text())='吊销']")
+                        btns = [_b for _b in _all if getattr(_b, "_id", None) not in known_ids]
+                        if not btns:
+                            # 回退：已知按钮之外没有时，说明对话框没出来，继续等
+                            raise RuntimeError("no dialog button yet")
+
+                        def _is_dialog(_b):
+                            try:
+                                _b.find_element(By.XPATH, "./ancestor::details")
+                                return False
+                            except Exception:
+                                return True
+                        _dlg = [_b for _b in btns if _is_dialog(_b)]
+                        b = _dlg[0] if _dlg else btns[-1]
                         if btns:
-                            b = btns[-1]
                             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", b)
                             time.sleep(0.2)
                             try:
@@ -535,7 +562,13 @@ def reconcile_certificates(driver, keep_count):
                         pass
                     time.sleep(1)
                 if not confirmed:
-                    log("CERT_DEBUG", f"  未找到确认按钮，跳过: {name}")
+                    try:
+                        _txts = [(_b.text or "").strip() or "<空>"
+                                 for _b in driver.find_elements(By.TAG_NAME, "button")
+                                 if _b.is_displayed()]
+                        log("CERT_DEBUG", f"  确认失败: {name} | 页面可见按钮: {_txts}")
+                    except Exception as _e:
+                        log("CERT_DEBUG", f"  确认失败: {name} (按钮枚举异常: {_e})")
             except Exception as exc:
                 log("CERT_DEBUG", f"  吊销失败: {name} - {exc}")
             time.sleep(0.5)
@@ -1087,18 +1120,8 @@ def _scan_available_ids(driver):
     用于清理已下线或负载较高的服务器的僵尸记录，确保库存始终 <= 国家数 × PER_COUNTRY。"""
     by_country = {}  # {country_label: [(load_pct, sid), ...]}
     try:
-        driver.get(DOWNLOADS_URL)
-        time.sleep(2)
-        # 确保 WireGuard tab 可见
-        try:
-            tabs = driver.find_elements(By.CSS_SELECTOR, ".tabs a")
-            for tab in tabs:
-                if "WireGuard" in tab.text:
-                    tab.click()
-                    time.sleep(1)
-                    break
-        except Exception:
-            pass
+        # 注意: 不 driver.get() 重载 —— finally 里可能已 do_logout，重载回未登录页致 0 国。
+        # 直接下载流程刚走完，当前 DOM 即最新，直接扫。
         # 只扫“或指定服务器”之下的国家分组合（国家 details 里才有 tr 服务器行）；
         # 顶部证书区 / 帮助区 details 没有 tr，会被天然跳过
         try:
