@@ -459,16 +459,28 @@ def reconcile_certificates(driver, keep_count):
                     btn.click()
                 except Exception:
                     driver.execute_script("arguments[0].click();", btn)
-                # 等待确认对话框
-                try:
-                    confirm = WebDriverWait(driver, 5).until(
-                        EC.element_to_be_clickable((By.XPATH,
-                            "//button[contains(text(), '吊销') or normalize-space(text())='吊销']")))
-                    confirm.click()
-                    revoked += 1
-                    log("CERT", f"  已吊销: {name}")
-                except Exception:
-                    log("CERT_DEBUG", f"  未找到确认按钮，跳过: {name}")
+                # Retry 3 times for revoke confirmation dialog
+                confirmed = False
+                for _att in range(3):
+                    try:
+                        btns = driver.find_elements(By.XPATH, "//button[normalize-space(text())='鍚婇攢']")
+                        if btns:
+                            b = btns[-1]
+                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", b)
+                            time.sleep(0.2)
+                            try:
+                                b.click()
+                            except Exception:
+                                driver.execute_script("arguments[0].click();", b)
+                            confirmed = True
+                            revoked += 1
+                            log("CERT", f"  宸插悐閿€: {name}")
+                            break
+                    except Exception:
+                        pass
+                    time.sleep(1)
+                if not confirmed:
+                    log("CERT_DEBUG", f"  鏈湡埌纭��轰箻閽�紝璺宠繃: {name}")
             except Exception as exc:
                 log("CERT_DEBUG", f"  吊销失败: {name} - {exc}")
             time.sleep(0.5)
