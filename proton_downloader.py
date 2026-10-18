@@ -376,19 +376,10 @@ def _modal_visible(driver):
 
     只认页面上明确显示的内容: 可见的「文本」tab 文案, 或弹窗里已渲染的 [Interface]
     配置正文。不靠 class 名/title/iframe 等 DOM 内部标识 (改版易失效)。"""
-    # 调试: 打印当前可查的可见文本, 定位弹窗判据失败原因
-    try:
-        visible_texts = [
-            el.text.strip() for el in driver.find_elements(By.XPATH, "//body//*[contains(text(), '文本')]")
-            if el.is_displayed()
-        ]
-        log("WG_DEBUG", f"_modal_visible text='文本': {visible_texts[:5]}")
-    except Exception:
-        pass
     try:
         for el in driver.find_elements(By.XPATH, "//*[normalize-space(text())='文本']"):
-                if el.is_displayed():
-                    return True
+            if el.is_displayed():
+                return True
     except Exception:
         pass
     if _conf_text_visible(driver) is not None:
@@ -456,10 +447,13 @@ def _close_conf_modal(driver):
         except Exception:
             pass
     t0 = time.time()
-    while time.time() - t0 < 8:
+    while time.time() - t0 < 2:
         if not _modal_visible(driver):
             return True
-        time.sleep(0.5)
+        time.sleep(0.2)
+    # 快速确认关闭, 最多等 2s 而非 8s (弹窗关闭后 React 可能慢半拍)
+    # 改为: 点击关闭/ESC 后只等 2s 确认, 不长时间轮询
+    # (上面循环已改 8->2, sleep 0.5->0.2, 总共最多 ~40 次调用被砍掉大半)
     try:
         ActionChains(driver).send_keys(Keys.ESCAPE).perform()
         time.sleep(1)
@@ -502,36 +496,29 @@ def _await_conf(driver, sid, download_dir, before, timeout=12):
             break
         time.sleep(0.5)
     elapsed_wait = time.time() - t0
-    if elapsed_wait > 1:
-        log("WG_DEBUG", f"{sid} 弹窗等待 {elapsed_wait:.1f}s (超时{'>' if elapsed_wait >= timeout else '='}{timeout}s)")
-    log("WG_DEBUG", f"{sid} 弹窗等待结束 modal={_modal_visible(driver)} elapsed={elapsed_wait:.1f}s")
+    if elapsed_wait >= timeout:
+        log("WG_DEBUG", f"{sid} 弹窗超时 {elapsed_wait:.1f}s (> {timeout}s)")
     if _modal_visible(driver):
         found = _conf_text_visible(driver)
-        log("WG_DEBUG", f"{sid} 弹窗已开 found={'yes' if found else 'no'}")
         if found is None and _click_outside_tr(driver, "文本", timeout=2):
             time.sleep(0.3)
             found = _conf_text_visible(driver)
-        log("WG_DEBUG", f"{sid} 切文本后 found={'yes' if found else 'no'}")
         if found is not None:
             fn = _save_conf_text(download_dir, sid, found)
             log("WG", f"{sid} 弹窗提取配置全文 -> {fn}")
             _close_conf_modal(driver)
             return fn
-        clicked_dl = _click_outside_tr(driver, "下载", timeout=5)
-        log("WG_DEBUG", f"{sid} 点击弹窗下载 btn={clicked_dl}")
-        if clicked_dl:
+        if _click_outside_tr(driver, "下载", timeout=5):
             t1 = time.time()
             while time.time() - t1 < 8:
                 now = {f for f in os.listdir(download_dir)
                        if f.lower().endswith(".conf")}
                 if now - before:
                     time.sleep(0.5)  # 等文件写完
-                    log("WG_DEBUG", f"{sid} 弹窗内已落盘 {sorted(now-before)[0]}")
                     _close_conf_modal(driver)
                     return sorted(now - before)[0]
                 time.sleep(0.5)
-        else:
-            log("WG_DEBUG", f"{sid} 弹窗无下载按钮 (已点击创建但弹窗没出现?)")
+            log("WG_DEBUG", f"{sid} 弹窗下载等待 {time.time()-t1:.1f}s")
     _close_conf_modal(driver)  # 收尾: 无论成败都不留弹窗挡路
     for rec in driver.find_elements(
             By.XPATH, f"//tr[td[normalize-space(text())='{sid}']]"):
@@ -541,7 +528,7 @@ def _await_conf(driver, sid, download_dir, before, timeout=12):
                     "arguments[0].scrollIntoView({block: 'center'});", db)
                 time.sleep(0.1)
                 db.click()
-                log("WG_DEBUG", f"{sid} 记录区点击「下载」btn (total_elapsed={time.time()-t0_click:.1f}s)")
+                log("WG_DEBUG", f"{sid} 记录区点下载 btn elapsed={time.time()-t0_click:.1f}s")
             except Exception:
                 try:
                     ActionChains(driver).move_to_element(db).click().perform()
@@ -554,7 +541,7 @@ def _await_conf(driver, sid, download_dir, before, timeout=12):
                        if f.lower().endswith(".conf")}
                 if now - before:
                     time.sleep(0.5)
-                    log("WG_DEBUG", f"{sid} 记录区已落盘 {sorted(now-before)[0]}")
+                    log("WG_DEBUG", f"{sid} 记录区已落盘 {sorted(now-before)[0]} elapsed={time.time()-t0_click:.1f}s")
                     got = sorted(now - before)[0]
                     break
                 found = _conf_text_visible(driver)
@@ -565,7 +552,6 @@ def _await_conf(driver, sid, download_dir, before, timeout=12):
                 time.sleep(0.5)
             if got:
                 return got
-    log("WG_DEBUG", f"{sid} 全部路径失败 total={time.time()-t0_click:.1f}s")
     return None
 
 
