@@ -480,7 +480,7 @@ def _save_conf_text(download_dir, sid, text):
     return fn
 
 
-def _await_conf(driver, sid, download_dir, before, timeout=20, t0_click=None):
+def _await_conf(driver, sid, download_dir, before, timeout=25, t0_click=None):
     """点「创建/下载」后拿配置: 返回 (文件名, 路径标签)。"""
     t0 = time.time()
     if t0_click is None:
