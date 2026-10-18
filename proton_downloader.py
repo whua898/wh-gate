@@ -412,6 +412,24 @@ def purge_certificates(driver):
         time.sleep(2)
         deleted = 0
         while True:
+            # 调试: 输出页面关键信息
+            src = driver.page_source or ""
+            log("CERT_DEBUG", f"页面长度: {len(src)}")
+            
+            # 查找所有可能包含证书信息的区域
+            cert_containers = driver.find_elements(By.XPATH,
+                "//*[contains(text(), 'wh-gate')] | //*[@class='certificate'] | //*[contains(@class, 'cert')]")
+            log("CERT_DEBUG", f"找到 {len(cert_containers)} 个证书容器")
+            
+            # 查找所有按钮
+            all_buttons = driver.find_elements(By.XPATH, "//button")
+            log("CERT_DEBUG", f"页面共有 {len(all_buttons)} 个按钮")
+            
+            # 查找所有可点击元素
+            clickable = driver.find_elements(By.XPATH,
+                "//button | //a[@href] | //[contains(@role, 'button')] | //*[contains(@onclick)]")
+            log("CERT_DEBUG", f"可点击元素: {len(clickable)} 个")
+            
             # 多种方式查找删除按钮
             delete_btns = []
             try:
@@ -426,36 +444,66 @@ def purge_certificates(driver):
                 delete_btns.extend(driver.find_elements(By.XPATH,
                     "//button[contains(text(), 'Delete') or contains(text(), '吊销')]"))
             except: pass
+            try:
+                # 查找所有包含 × 的元素
+                delete_btns.extend(driver.find_elements(By.XPATH,
+                    "//*[normalize-space(text())='×']"))
+            except: pass
+            try:
+                # 查找所有 aria-label 包含删除/关闭的元素
+                delete_btns.extend(driver.find_elements(By.XPATH,
+                    "//*[@aria-label[contains(., '删除') or contains(., '关闭') or contains(., 'Delete')]]"))
+            except: pass
             
             # 去重
             unique = []
-            seen = set()
+            seen_ids = set()
             for btn in delete_btns:
-                if id(btn) not in seen and btn.is_displayed():
-                    seen.add(id(btn))
+                btn_id = id(btn)
+                if btn_id not in seen_ids and btn.is_displayed():
+                    seen_ids.add(btn_id)
                     unique.append(btn)
             
+            log("CERT_DEBUG", f"找到 {len(unique)} 个候选删除按钮")
+            
             if not unique:
-                break
+                # 尝试滚动页面查找更多按钮
+                log("CERT_DEBUG", "未找到删除按钮, 尝试滚动页面...")
+                driver.execute_script("window.scrollBy(0, 500);")
+                time.sleep(1)
+                # 重新查找
+                delete_btns = driver.find_elements(By.XPATH, "//button")
+                log("CERT_DEBUG", f"滚动后找到 {len(delete_btns)} 个按钮")
+                break  # 暂时退出，避免无限循环
             
             try:
-                unique[0].click()
+                btn = unique[0]
+                btn.click()
                 time.sleep(1)
                 # 等待确认
+                confirmed = False
                 try:
                     confirms = driver.find_elements(By.XPATH,
-                        "//*[normalize-space(text())='确认'] | //*/button[normalize-space(text())='确定']")
+                        "//*[normalize-space(text())='确认'] | //*/button[normalize-space(text())='确定'] | //*/button[contains(text(), 'Delete')]")
                     for cb in confirms:
                         if cb.is_displayed():
                             cb.click()
-                            deleted += 1
-                            log("CERT", f"  已删除证书 ({deleted})")
+                            confirmed = True
                             break
                 except:
+                    pass
+                
+                if confirmed:
                     deleted += 1
                     log("CERT", f"  已删除证书 ({deleted})")
-            except:
+                    time.sleep(1)
+                else:
+                    deleted += 1
+                    log("CERT", f"  已删除证书 ({deleted})")
+            except Exception as exc:
+                log("CERT_DEBUG", f"删除证书异常: {exc}")
                 break
+        
         log("CERT", f"证书清除完成: 共删除 {deleted} 条")
         return deleted
     except Exception as exc:
