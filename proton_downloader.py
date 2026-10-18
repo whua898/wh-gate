@@ -315,7 +315,6 @@ CERT_NAME = _env("PROTON_CERT_NAME", "wh-gate")
 PROTON_CERT_GC = os.environ.get("PROTON_CERT_GC", "0").strip().lower() in ("1", "true", "yes")
 
 
-
 def gc_certificates(driver):
     """清理同名证书的多余副本, 只保留过期日期最晚的那一个。
 
@@ -488,15 +487,15 @@ def _click_text(driver, text, timeout=30):
     页脚链接) 会永远等不到; 这里遍历全部匹配、跳过隐藏节点, 原生 click 被挡时
     用 JS click 兜底。找不到抛 RuntimeError (调用方收敛处理)。"""
     xps = [
-    f"//*[normalize-space(text())='{text}']",
-    # 最内层包含匹配兜底 (排除还含同文本子节点的祖先, 避免误点 body/html)
-    f"//*[contains(normalize-space(.), '{text}') "
-    f"and not(*[contains(normalize-space(.), '{text}')])]",
+        f"//*[normalize-space(text())='{text}']",
+        # 最内层包含匹配兜底 (排除还含同文本子节点的祖先, 避免误点 body/html)
+        f"//*[contains(normalize-space(.), '{text}') "
+        f"and not(*[contains(normalize-space(.), '{text}')])]",
     ]
     deadline = time.time() + timeout
     last = "无匹配"
     while time.time() < deadline:
-    for xp in xps:
+        for xp in xps:
             for el in driver.find_elements(By.XPATH, xp):
                 try:
                     if not el.is_displayed():
@@ -510,7 +509,7 @@ def _click_text(driver, text, timeout=30):
                     return el
                 except Exception as exc:
                     last = type(exc).__name__
-    time.sleep(2)
+        time.sleep(2)
     raise RuntimeError(f"{text}: {last} ({timeout}s 内未见可点元素)")
 
 
@@ -519,10 +518,10 @@ def ensure_certificate(driver):
     # 先检查当前页面是否已有该证书的条目 (证书名+过期日期)。
     # 注意: 必须在 fill_input 之前检查, 否则填进去的名字本身就会匹配。
     try:
-    src = (driver.page_source or "").lower()
-    has_name = CERT_NAME.lower() in src
-    # 宽泛匹配: "于 Oct 17, 2027 过期" (无点号) 或 "expires on ..."
-    has_expiry_cn = bool(re.search(r"于\s+\w+\s+\d{1,2},?\s*\d{4}\s+过期", src))
+        src = (driver.page_source or "").lower()
+        has_name = CERT_NAME.lower() in src
+        # 宽泛匹配: "于 Oct 17, 2027 过期" (无点号) 或 "expires on ..."
+        has_expiry_cn = bool(re.search(r"于\s+\w+\s+\d{1,2},?\s*\d{4}\s+过期", src))
         has_expiry_en = bool(re.search(r"expires?\s+(on\s+)?\w+\s+\d{1,2},?\s*\d{4}", src))
         if has_name and (has_expiry_cn or has_expiry_en):
             log("CERT", f"已存在证书 {CERT_NAME}, 跳过创建")
@@ -781,6 +780,13 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
     if not ensure_certificate(driver):
         return None
     gc_certificates(driver)  # 清理同名多余证书 (需 PROTON_CERT_GC=1)
+        # 删除证书后页面结构可能变化, 重新点击 WireGuard 标签刷新视图
+        try:
+            _click_text(driver, "WireGuard", timeout=15)
+            time.sleep(1)
+        except Exception as exc:
+            log("CERT_DEBUG", f"重新点击 WireGuard 标签失败: {exc}")
+    new_count = 0
     countries = driver.find_elements(By.CSS_SELECTOR, "details")
     if not countries:
         log("WG", "未找到服务器分组 (选择器失效)")
@@ -1049,23 +1055,24 @@ def main():
                     log("SESS", "重新登录/回下载页失败, 提前收尾 (已有库存照常合并)")
                     break
             do_logout(driver)
-        finally:
-            # 清理必须在 driver.quit() 之前执行
+            # 清理僵尸 ID: 每国只保留负载最低的 PER_COUNTRY 台，多余的全部剔除
+            # 必须在 driver.quit() 之前执行，driver 关闭后无法访问页面
             try:
                 live_ids = _scan_available_ids(driver)
-                if live_ids is not None:
+                if live_ids is None:
+                    log("CLEANUP", "扫描失败, 跳过清理, 保留现有记录")
+                else:
                     pruned = downloaded - live_ids
                     if pruned:
                         log("CLEANUP", f"清理 {len(pruned)} 条记录 (已下线或负载较高): {sorted(pruned)}")
                     added = live_ids - downloaded
                     if added:
                         log("CLEANUP", f"新增 {len(added)} 条低负载服务器记录: {sorted(added)}")
-                    downloaded = live_ids
-                    log("CLEANUP", f"清理后保留 {len(downloaded)} 条")
-                else:
-                    log("CLEANUP", "扫描失败, 跳过清理")
+                    downloaded = live_ids  # 直接用页面当前最低负载名单，确保库存始终 = 国家数 x PER_COUNTRY
+                    log("CLEANUP", f"清理后保留 {len(downloaded)} 条, 原记录 {len(download)} 条")
             except Exception as exc:
                 log("CLEANUP", f"清理失败 (不影响主流程): {exc}")
+        finally:
             try:
                 driver.quit()
             except Exception:
