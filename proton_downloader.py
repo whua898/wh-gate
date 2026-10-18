@@ -325,7 +325,8 @@ def gc_certificates(driver):
         log("CERT", "证书清理已关闭 (PROTON_CERT_GC=0), 跳过")
         return 0
     try:
-        pattern = re.compile(r"于\s+(\w{3}\.)\s+(\d{1,2}),\s+(\d{4})\s+过期")
+        # 宽泛匹配: "于 Oct 17, 2027 过期" (月份可有点号也可无)
+        pattern = re.compile(r"于\s+(\w+)\s+(\d{1,2}),\s+(\d{4})\s+过期")
         rows = driver.find_elements(By.XPATH,
             f"//*[normalize-space(text())='{CERT_NAME}' and contains(., '过期')]")
         if not rows:
@@ -356,9 +357,12 @@ def gc_certificates(driver):
                 if revoke_btn and m:
                     from datetime import datetime
                     try:
-                        dt = datetime.strptime(f"{year} {month} {day}", "%Y %b. %d")
+                        dt = datetime.strptime(f"{year} {month} {day}", "%Y %b %d")
                     except ValueError:
-                        dt = datetime(2000, 1, 1)
+                        try:
+                            dt = datetime.strptime(f"{year} {month}. {day}", "%Y %b. %d")
+                        except ValueError:
+                            dt = datetime(2000, 1, 1)
                     entries.append((dt, revoke_btn, text[:80]))
             except Exception as exc:
                 log("CERT_DEBUG", f"证书清理解析行失败: {exc}")
