@@ -344,16 +344,27 @@ def gc_certificates(driver):
                 month, day, year = m.group(1), m.group(2), m.group(3)
                 revoke_btn = None
                 try:
+                    # 查找 "吊销" 文本按钮
                     revoke_candidates = row.find_elements(By.XPATH,
                         ".//*[normalize-space(text())='吊销']")
                     if revoke_candidates:
                         revoke_btn = revoke_candidates[0]
                 except Exception:
                     pass
+                # 如果没找到 "吊销" 按钮，尝试找 × 图标按钮
+                if not revoke_btn:
+                    try:
+                        revoke_candidates = row.find_elements(By.XPATH,
+                            ".//*[normalize-space(text())='×' or normalize-space(text())='x' or contains(text(), '×')]")
+                        if revoke_candidates:
+                            revoke_btn = revoke_candidates[0]
+                    except Exception:
+                        pass
+                # 全局兜底
                 if not revoke_btn:
                     try:
                         revoke_btn = driver.find_element(By.XPATH,
-                            f"(//*[normalize-space(text())='吊销'])[last()]")
+                            f"(//*[normalize-space(text())='吊销' or normalize-space(text())='×'])[last()]")
                     except Exception:
                         pass
                 if revoke_btn and m:
@@ -380,7 +391,7 @@ def gc_certificates(driver):
                 btn.click()
                 time.sleep(1)
                 confirm_btns = driver.find_elements(By.XPATH,
-                    "//*[normalize-space(text())='确认'] | //*/button[normalize-space(text())='确定'] | //*/button[normalize-space(text())='吊销']")
+                    "//*[normalize-space(text())='确认'] | //*/button[normalize-space(text())='确定'] | //*/button[normalize-space(text())='吊销'] | //*/span[normalize-space(text())='×']")
                 confirmed = False
                 for cb in confirm_btns:
                     if cb.is_displayed():
@@ -430,29 +441,30 @@ def purge_certificates(driver):
                 "//button | //a[@href] | //*[contains(@role, 'button')] | //*[contains(@onclick)]")
             log("CERT_DEBUG", f"可点击元素: {len(clickable)} 个")
             
-            # 多种方式查找删除按钮
+            # 多种方式查找删除按钮 (× 图标按钮可能在 span/div/i/svg 等非 button 元素中)
             delete_btns = []
             try:
                 delete_btns.extend(driver.find_elements(By.XPATH,
                     "//button[contains(@aria-label, '删除') or contains(@aria-label, '关闭') or @role='button']"))
             except: pass
             try:
+                # 匹配各种元素类型的 × 按钮 (button/span/div/i/svg/a)
                 delete_btns.extend(driver.find_elements(By.XPATH,
-                    "//button[normalize-space(text())='×' or contains(text(), '×')]"))
+                    "(//button | //span | //div | //i | //svg | //a)[normalize-space(text())='×' or normalize-space(text())='x' or contains(text(), '×') or contains(text(), 'x')]"))
             except: pass
             try:
                 delete_btns.extend(driver.find_elements(By.XPATH,
                     "//button[contains(text(), 'Delete') or contains(text(), '吊销')]"))
             except: pass
             try:
-                # 查找所有包含 × 的元素
+                # 查找所有包含 × 的可点击元素 (不限于 button)
                 delete_btns.extend(driver.find_elements(By.XPATH,
-                    "//*[normalize-space(text())='×']"))
+                    "//*[contains(@class, 'close') or contains(@class, 'delete') or contains(@class, 'remove') or contains(@role, 'button')]"))
             except: pass
             try:
-                # 查找所有 aria-label 包含删除/关闭的元素
+                # 通过 aria-label 查找
                 delete_btns.extend(driver.find_elements(By.XPATH,
-                    "//*[@aria-label[contains(., '删除') or contains(., '关闭') or contains(., 'Delete')]]"))
+                    "//*[@aria-label[contains(., '删除') or contains(., '关闭') or contains(., 'Delete') or contains(., 'Close') or contains(., 'Remove')]]"))
             except: pass
             
             # 去重
@@ -484,7 +496,7 @@ def purge_certificates(driver):
                 confirmed = False
                 try:
                     confirms = driver.find_elements(By.XPATH,
-                        "//*[normalize-space(text())='确认'] | //*/button[normalize-space(text())='确定'] | //*/button[contains(text(), 'Delete')]")
+                        "//*[normalize-space(text())='确认'] | //*/button[normalize-space(text())='确定'] | //*/button[contains(text(), 'Delete')] | //*/span[normalize-space(text())='×']")
                     for cb in confirms:
                         if cb.is_displayed():
                             cb.click()
