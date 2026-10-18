@@ -498,6 +498,9 @@ def reconcile_certificates(driver, keep_count, _pass=1):
             except Exception:
                 continue
 
+        # 具名常驻证书 (wh-gate) 永不吊销: 它创建得早, 反转方向后位于头部会被误杀,
+        # 下轮 ensure_certificate 又重建, 反复横跳。也不计入裁剪基数。
+        certs = [c for c in certs if c[0] != CERT_NAME]
         total = len(certs)
         if keep_count <= 0 and total > 0:
             log("CERT", f"保留数为 0 但页面有 {total} 台证书 (判定扫描异常), 跳过吊销以防误清空")
@@ -509,9 +512,10 @@ def reconcile_certificates(driver, keep_count, _pass=1):
         to_revoke = total - keep_count
         log("CERT", f"裁剪证书: {total} 台 -> 保留 {keep_count} 台, 吊销 {to_revoke} 台")
         revoked = 0
-        # keep_count 台排在最前, 多余的 to_revoke 台砍尾部。
-        # 注意: 不能写 certs[to_revoke:] —— 那只有 keep_count 个元素, 反向了。
-        for name, btn in certs[keep_count:keep_count + to_revoke]:
+        # 页面按创建时间排序: 老的在前, 新下载的追加在尾部。
+        # 必须保留尾部 keep_count 台 (最新 = 库存对应的 conf), 砍头部 to_revoke 台 (最老)。
+        # 教训: 曾写 certs[keep_count:...] 保留最老 —— 每轮都把自己刚下载的证书吊销掉。
+        for name, btn in certs[:to_revoke]:
             try:
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
                 time.sleep(0.3)
@@ -1057,8 +1061,9 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
         if new_count >= MAX_DL:
             log("WG", f"本会话上限 {MAX_DL}, 停下 (下次增量继续)")
             return False
-        if sid in downloaded_ids:
-            continue
+        # (原: if sid in downloaded_ids: continue —— 增量跳过。已记录服务器的证书
+        # 可能在历史轮次被吊销, 跳过会让库存里的旧 conf 永远拿不到有效证书;
+        # 现在每轮对 10 台候选全部补下, 保证「网页尾部 keep 张新证书 == 库存 conf」。
         row = _find_row_btn(driver, sid)
         if row is None:
             continue
