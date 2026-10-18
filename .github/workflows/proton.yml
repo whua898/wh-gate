@@ -9,13 +9,6 @@ name: ProtonVPN WireGuard Config Download
 #   - cron: "0 3 * * *"
 on:
   workflow_dispatch:
-    inputs:
-        description: '清除账户所有旧证书 (仅第一次运行后设回 0)'
-        type: choice
-        options:
-          - '0'
-          - '1'
-        default: '0'
 
 permissions:
   contents: write # 回写 proton_configs.enc + downloaded_wg_ids.json
