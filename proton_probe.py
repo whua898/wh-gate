@@ -12,6 +12,7 @@ ProtonVPN WireGuard 节点活性探测 (UDP 半握手)
 """
 
 import hashlib
+import os
 import random
 import socket
 import struct
@@ -108,6 +109,10 @@ def probe_and_filter(nodes, log, concurrency=16, timeout=8.0,
     cooldown: 对同一 server:port 两次探测间隔 (秒); 避免频繁打扰服务端。
     """
     import threading
+    # PROTON_PROBE_RESET=1 时清除缓存，强制全量重测
+    if os.environ.get("PROTON_PROBE_RESET", "0").strip().lower() in ("1", "true", "yes"):
+        setattr(probe_and_filter, "_cache", {})
+        log("PROBE", "缓存已清除 (PROTON_PROBE_RESET=1)")
     now = time.monotonic()
     with getattr(probe_and_filter, "_lock", threading.Lock()) as lock:
         cache = getattr(probe_and_filter, "_cache", {})
