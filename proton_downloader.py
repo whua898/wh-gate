@@ -411,7 +411,7 @@ def gc_certificates(driver):
         return 0
 
 
-def reconcile_certificates(driver, keep_count):
+def reconcile_certificates(driver, keep_count, _pass=1):
     """裁剪证书: 页面证书数超过 keep_count 时吊销多余者，确保始终 = 库存数。"""
     try:
         # 导航到 WireGuard tab
@@ -572,9 +572,14 @@ def reconcile_certificates(driver, keep_count):
                         log("CERT_DEBUG", f"  确认失败: {name} (按钮枚举异常: {_e})")
             except Exception as exc:
                 log("CERT_DEBUG", f"  吊销失败: {name} - {exc}")
-            time.sleep(0.5)
+            time.sleep(1.0)  # 放慢点按, 降低被服务端限流丢弃的概率
 
-        log("CERT", f"裁剪完成: 吊销 {revoked} 台, 剩余 {total - revoked} 台")
+        log("CERT", f"裁剪完成: 吊销 {revoked} 台, 页面报剩余 {total - revoked} 台")
+        # 点确认按钮 ≠ 服务端真删: 限流会静默丢弃部分吊销请求 (实测 45 点只剩 14 生效)。
+        # 稍候重新定位证书区+重新收集按钮复扫, 仍超标就递归补吊, 最多 3 轮。
+        if revoked and _pass < 3:
+            time.sleep(1.5)
+            return revoked + reconcile_certificates(driver, keep_count, _pass + 1)
         return revoked
     except Exception as exc:
         log("CERT", f"证书裁剪异常 (不影响主流程): {exc}")
