@@ -348,6 +348,10 @@ def _click_text(driver, text, timeout=30):
 
 def ensure_certificate(driver):
     """填证书名 + 选平台 GNU/Linux + 创建 (若已存在同名证书则跳过)。"""
+    # 先导航到证书管理页 (在创建页之前), 检查已有证书列表
+    # Proton 的证书管理页在 /downloads 的同一框架内, 通过点击页面上已有的
+    # "wh-gate" 证书名称可跳转; 此处改为: 直接检查当前下载页是否包含
+    # 已存在的证书条目 (证书名 + 过期日期格式), 而不是填完名字后再查。
     try:
         inputs = [e for e in driver.find_elements(By.CSS_SELECTOR, "input")
                   if e.is_displayed()]
@@ -360,7 +364,21 @@ def ensure_certificate(driver):
             time.sleep(2)
         except Exception:
             log("CERT", "平台 GNU/Linux 未命中, 使用默认平台继续")
-        if CERT_NAME in (driver.page_source or ""):
+        # 填完名字后 page_source 里一定有 CERT_NAME, 所以不能在填完之后查。
+        # 改为检查: 点创建按钮后, 页面是否出现了"已存在"的提示文案或证书列表中的条目。
+        # 更可靠的做法: 检查当前页是否已有该证书的条目 (证书名+过期日期的组合)。
+        existing = False
+        try:
+            # 证书创建成功后, 页面会出现类似 "wh-gate\n于 Oct 18, 2027 过期" 的条目
+            # 用两个锚点同时匹配来确认是已有证书而非输入框:
+            cert_pattern = CERT_NAME
+            expiry_pattern = r"于\s+\w{3}\.\s+\d{1,2},\s+\d{4}\s+过期"
+            src = driver.page_source or ""
+            if cert_pattern in src and re.search(expiry_pattern, src):
+                existing = True
+        except Exception:
+            pass
+        if existing:
             log("CERT", f"已存在证书 {CERT_NAME}, 跳过创建")
             return True
         _click_text(driver, "创建")
