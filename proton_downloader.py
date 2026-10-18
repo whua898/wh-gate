@@ -518,7 +518,7 @@ def reconcile_certificates(driver, keep_count):
                 confirmed = False
                 for _att in range(3):
                     try:
-                        btns = driver.find_elements(By.XPATH, "//button[normalize-space(text())='鍚婇攢']")
+                        btns = driver.find_elements(By.XPATH, "//button[normalize-space(text())='吊销']")
                         if btns:
                             b = btns[-1]
                             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", b)
@@ -529,13 +529,13 @@ def reconcile_certificates(driver, keep_count):
                                 driver.execute_script("arguments[0].click();", b)
                             confirmed = True
                             revoked += 1
-                            log("CERT", f"  宸插悐閿€: {name}")
+                            log("CERT", f"  \u5df2吊销: {name}")
                             break
                     except Exception:
                         pass
                     time.sleep(1)
                 if not confirmed:
-                    log("CERT_DEBUG", f"  鏈湡埌纭��轰箻閽�紝璺宠繃: {name}")
+                    log("CERT_DEBUG", f"  未找到确认按钮，跳过: {name}")
             except Exception as exc:
                 log("CERT_DEBUG", f"  吊销失败: {name} - {exc}")
             time.sleep(0.5)
