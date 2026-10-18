@@ -482,7 +482,8 @@ def _is_certificate_entry(cert_item):
         return False
 
 
-    """按文本点可见元素。
+def _click_text(driver, text, timeout=30):
+        """按文本点可见元素。
     element_to_be_clickable 只看首个匹配 —— 页面若有隐藏同名副本 (移动端菜单/
     页脚链接) 会永远等不到; 这里遍历全部匹配、跳过隐藏节点, 原生 click 被挡时
     用 JS click 兜底。找不到抛 RuntimeError (调用方收敛处理)。"""
