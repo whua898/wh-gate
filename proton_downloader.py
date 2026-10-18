@@ -428,17 +428,36 @@ def purge_certificates(driver):
             log("CERT_DEBUG", f"页面长度: {len(src)}")
             
             # 查找所有可能包含证书信息的区域
-            cert_containers = driver.find_elements(By.XPATH,
-                "//*[contains(text(), 'wh-gate')] | //*[@class='certificate'] | //*[contains(@class, 'cert')]")
+            cert_containers = []
+            try:
+                cert_containers.extend(driver.find_elements(By.XPATH, "//*[contains(text(), 'wh-gate')]"))
+            except: pass
+            try:
+                cert_containers.extend(driver.find_elements(By.XPATH, "//*[@class='certificate']"))
+            except: pass
+            try:
+                cert_containers.extend(driver.find_elements(By.XPATH, "//*[contains(@class, 'cert')]"))
+            except: pass
             log("CERT_DEBUG", f"找到 {len(cert_containers)} 个证书容器")
             
             # 查找所有按钮
             all_buttons = driver.find_elements(By.XPATH, "//button")
             log("CERT_DEBUG", f"页面共有 {len(all_buttons)} 个按钮")
             
-            # 查找所有可点击元素
-            clickable = driver.find_elements(By.XPATH,
-                "//button | //a[@href] | //*[contains(@role, 'button')] | //*[contains(@onclick)]")
+            # 查找所有可点击元素 (分步查找避免复杂 XPath 报错)
+            clickable = []
+            try:
+                clickable.extend(driver.find_elements(By.TAG_NAME, "button"))
+            except: pass
+            try:
+                clickable.extend(driver.find_elements(By.XPATH, "//a[@href]"))
+            except: pass
+            try:
+                clickable.extend(driver.find_elements(By.XPATH, "//*[@role='button']"))
+            except: pass
+            try:
+                clickable.extend(driver.find_elements(By.XPATH, "//*[@onclick]"))
+            except: pass
             log("CERT_DEBUG", f"可点击元素: {len(clickable)} 个")
             
             # 多种方式查找删除按钮 (× 图标按钮可能在 span/div/i/svg 等非 button 元素中)
