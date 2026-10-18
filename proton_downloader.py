@@ -403,52 +403,65 @@ def gc_certificates(driver):
 
 
 def purge_certificates(driver):
-    """清除账户所有旧证书 (仅此一次, 用完设回 PROTON_CERT_PURGE=0)。\n
-    策略: 遍历所有证书条目, 逐个点击「×」删除按钮。\n
-    安全: 仅在执行时生效, 不影响后续运行。\n
+    """清除账户所有旧证书 (仅此一次, 用完设回 PROTON_CERT_PURGE=0)。
+    策略: 遍历所有证书条目, 逐个点击删除按钮。
+    安全: 仅在执行时生效, 不影响后续运行。
     """
     log("CERT", "开始清除所有旧证书 (PROTON_CERT_PURGE=1)")
     try:
-        # 等待页面加载
         time.sleep(2)
         deleted = 0
         while True:
-            # 查找所有删除按钮 (× 图标或文本)
-            delete_btns = driver.find_elements(By.XPATH,
-                ".//*[contains(@class, 'certificate')]//button[contains(text(), '×') or contains(text(), '删除') or contains(text(), 'Delete') or @aria-label='删除'] | "
-                ".//*[normalize-space(text())='×'] | "
-                "//button[contains(., '×')]")
-            if not delete_btns:
-                break
+            # 多种方式查找删除按钮
+            delete_btns = []
             try:
-                btn = delete_btns[0]
-                if not btn.is_displayed():
-                    break
-                btn.click()
+                delete_btns.extend(driver.find_elements(By.XPATH,
+                    "//button[contains(@aria-label, '删除') or contains(@aria-label, '关闭') or @role='button']"))
+            except: pass
+            try:
+                delete_btns.extend(driver.find_elements(By.XPATH,
+                    "//button[normalize-space(text())='×' or contains(text(), '×')]"))
+            except: pass
+            try:
+                delete_btns.extend(driver.find_elements(By.XPATH,
+                    "//button[contains(text(), 'Delete') or contains(text(), '吊销')]"))
+            except: pass
+            
+            # 去重
+            unique = []
+            seen = set()
+            for btn in delete_btns:
+                if id(btn) not in seen and btn.is_displayed():
+                    seen.add(id(btn))
+                    unique.append(btn)
+            
+            if not unique:
+                break
+            
+            try:
+                unique[0].click()
                 time.sleep(1)
-                # 等待并确认删除对话框
+                # 等待确认
                 try:
-                    confirm_btn = WebDriverWait(driver, 5).until(
-                        EC.element_to_be_clickable((By.XPATH,
-                            "//*[normalize-space(text())='确认'] | //*/button[normalize-space(text())='确定'] | //*/button[normalize-space(text())='删除'] | //*/button[contains(text(), 'Delete')]"))
-                    )
-                    if confirm_btn.is_displayed():
-                        confirm_btn.click()
-                        deleted += 1
-                        log("CERT", f"  已删除证书 ({deleted})")
-                        time.sleep(1)
-                except Exception:
-                    # 无弹窗直接删除成功
+                    confirms = driver.find_elements(By.XPATH,
+                        "//*[normalize-space(text())='确认'] | //*/button[normalize-space(text())='确定']")
+                    for cb in confirms:
+                        if cb.is_displayed():
+                            cb.click()
+                            deleted += 1
+                            log("CERT", f"  已删除证书 ({deleted})")
+                            break
+                except:
                     deleted += 1
                     log("CERT", f"  已删除证书 ({deleted})")
-            except Exception as exc:
-                log("CERT_DEBUG", f"删除证书异常: {exc}")
+            except:
                 break
         log("CERT", f"证书清除完成: 共删除 {deleted} 条")
         return deleted
     except Exception as exc:
         log("CERT", f"证书清除异常: {type(exc).__name__}: {exc}")
         return 0
+
 
 
 def _click_text(driver, text, timeout=30):
