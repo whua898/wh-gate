@@ -509,7 +509,9 @@ def reconcile_certificates(driver, keep_count):
         to_revoke = total - keep_count
         log("CERT", f"裁剪证书: {total} 台 -> 保留 {keep_count} 台, 吊销 {to_revoke} 台")
         revoked = 0
-        for name, btn in certs[to_revoke:]:
+        # keep_count 台排在最前, 多余的 to_revoke 台砍尾部。
+        # 注意: 不能写 certs[to_revoke:] —— 那只有 keep_count 个元素, 反向了。
+        for name, btn in certs[keep_count:keep_count + to_revoke]:
             try:
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
                 time.sleep(0.3)
