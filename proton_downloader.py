@@ -1180,6 +1180,15 @@ def main():
                 store[_norm_name(fn)] = f.read()
     if not store:
         die("密文库存为空且本轮 0 下载 (什么都没拿到, 本次运行判定失败)")
+    # 裁剪加密库存：只保留与当前有效 ID 对应的配置，与 downloaded 数量保持一致
+    if downloaded:
+        pruned_store = {k: v for k, v in store.items()
+                        if any(_norm_name(f"{sid}.conf") == k or k.endswith(_norm_name(f"{sid}.conf"))
+                               for sid in downloaded)}
+        if len(pruned_store) < len(store):
+            removed = len(store) - len(pruned_store)
+            log("CLEANUP", f"同步裁剪加密库存: 移除 {removed} 条已下线/高负载服务器的配置")
+        store = pruned_store
     save_encrypted_store(store)
     save_ids(downloaded)
     log("MERGE", f"合并后库存: {len(store)} 台, 已写回 {os.path.relpath(ENC_PATH, REPO_DIR)}")
