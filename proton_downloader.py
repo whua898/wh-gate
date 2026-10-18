@@ -1098,7 +1098,8 @@ def _scan_available_ids(driver):
             except Exception:
                 continue
     except Exception as exc:
-        log("CLEANUP", f"扫描可用服务器失败: {exc}")
+        log("CLEANUP", f"扫描可用服务器失败 (返回原记录, 不更新): {exc}")
+        return None  # 扫描失败时返回 None，调用方应跳过清理
     # 每国只保留负载最低的 PER_COUNTRY 台
     keep = set()
     for label, items in by_country.items():
@@ -1167,12 +1168,15 @@ def main():
     # 清理僵尸 ID: 每国只保留负载最低的 PER_COUNTRY 台，多余的全部剔除
     try:
         live_ids = _scan_available_ids(driver)
-        pruned = downloaded - live_ids
-        if pruned:
-            log("CLEANUP", f"清理 {len(pruned)} 条记录 (已下线或负载较高): {sorted(pruned)}")
-        kept = downloaded & live_ids
-        log("CLEANUP", f"清理后保留 {len(kept)} 条, 原记录 {len(downloaded)} 条")
-        downloaded = kept
+        if live_ids is None:
+            log("CLEANUP", "扫描失败, 跳过清理, 保留现有记录")
+        else:
+            pruned = downloaded - live_ids
+            if pruned:
+                log("CLEANUP", f"清理 {len(pruned)} 条记录 (已下线或负载较高): {sorted(pruned)}")
+            kept = downloaded & live_ids
+            log("CLEANUP", f"清理后保留 {len(kept)} 条, 原记录 {len(downloaded)} 条")
+            downloaded = kept
     except Exception as exc:
         log("CLEANUP", f"清理失败 (不影响主流程): {exc}")
 
