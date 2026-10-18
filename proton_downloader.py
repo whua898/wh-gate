@@ -411,7 +411,34 @@ def gc_certificates(driver):
         return 0
 
 
-def reconcile_certificates(driver, keep_count, _pass=1):
+_HASH_NAME_RE = re.compile(r"^[A-Za-z0-9+/]{86}==$")
+
+
+def _cert_entry_name(conf):
+    """页面条目名 = base64(SHA-512(conf 客户端公钥原始字节)), 由 PrivateKey 派生。
+    实测 8/8 命中 (ca-free#25 -> dwC+GyY/..., ch-free#7 -> purwk4Ly/...)。"""
+    try:
+        import base64 as _b64
+        import hashlib as _hashlib
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        if isinstance(conf, bytes):
+            conf = conf.decode("utf-8", "replace")
+        priv = None
+        for line in conf.splitlines():
+            s = line.strip()
+            if s.startswith("PrivateKey"):
+                priv = s.split("=", 1)[1].strip()
+                break
+        if not priv:
+            return None
+        raw = _b64.b64decode(priv)
+        pub = X25519PrivateKey.from_private_bytes(raw).public_key().public_bytes_raw()
+        return _b64.b64encode(_hashlib.sha512(pub).digest()).decode()
+    except Exception:
+        return None
+
+
+def reconcile_certificates(driver, keep_count, _pass=1, expected_names=None):
     """裁剪证书: 页面证书数超过 keep_count 时吊销多余者，确保始终 = 库存数。"""
     try:
         # 导航到 WireGuard tab
@@ -481,7 +508,7 @@ def reconcile_certificates(driver, keep_count, _pass=1):
         for d in ranged:
             try:
                 summary = d.find_element(By.TAG_NAME, "summary")
-                name = summary.text.strip()[:60]
+                name = summary.text.strip()[:120]  # 哈希名 88 字符, 截断会破坏精确匹配
                 if not name:
                     continue
                 # Expand cert row and scroll into view
@@ -498,25 +525,44 @@ def reconcile_certificates(driver, keep_count, _pass=1):
             except Exception:
                 continue
 
-        # 具名常驻证书 (wh-gate) 永不吊销: 它创建得早, 反转方向后位于头部会被误杀,
-        # 下轮 ensure_certificate 又重建, 反复横跳。也不计入裁剪基数。
-        # summary.text 可能是多行 (wh-gate 行会带"于 xx 过期/吊销"), 只比首行。
+        # 具名常驻证书 (wh-gate) 永不吊销: summary.text 可能是多行 (wh-gate 行会带
+        # "于 xx 过期/吊销"), 只比首行。
         certs = [c for c in certs if c[0].splitlines()[0].strip() != CERT_NAME]
         total = len(certs)
         if keep_count <= 0 and total > 0:
             log("CERT", f"保留数为 0 但页面有 {total} 台证书 (判定扫描异常), 跳过吊销以防误清空")
             return 0
-        if total <= keep_count:
-            log("CERT", f"证书 {total} 台 <= 库存 {keep_count} 台, 无需清理")
-            return 0
-
-        to_revoke = total - keep_count
-        log("CERT", f"裁剪证书: {total} 台 -> 保留 {keep_count} 台, 吊销 {to_revoke} 台")
+        if expected_names:
+            # 精确吊销 (条目名映射已破解): 条目名 = base64(SHA-512(conf 客户端公钥)),
+            # 与库存 conf 一一对应。只吊「形状像哈希名 (88字符 base64) 但不在库存集合」
+            # 的条目; 非哈希形状 (wh-gate 等手工具名证书) 一律免疫。不依赖创建顺序。
+            to_revoke_rows = []
+            kept_by_name = 0
+            kept_protected = 0
+            for c in certs:
+                nm = c[0].splitlines()[0].strip()
+                if nm in expected_names:
+                    kept_by_name += 1
+                    continue
+                if not _HASH_NAME_RE.fullmatch(nm):
+                    kept_protected += 1
+                    continue
+                to_revoke_rows.append(c)
+            log("CERT", f"精确匹配: 库存对应保留 {kept_by_name}, 具名证书保护 {kept_protected}, "
+                        f"待吊销 {len(to_revoke_rows)} (库存集合 {len(expected_names)})")
+            if not to_revoke_rows:
+                log("CERT", "页面无库存外多余条目, 无需清理")
+                return 0
+        else:
+            if total <= keep_count:
+                log("CERT", f"证书 {total} 台 <= 库存 {keep_count} 台, 无需清理")
+                return 0
+            to_revoke = total - keep_count
+            log("CERT", f"裁剪证书: {total} 台 -> 保留 {keep_count} 台, 吊销 {to_revoke} 台")
+            # 无精确集合时的回退策略: 按创建时间排序, 老的在前, 砍头部。
+            to_revoke_rows = certs[:to_revoke]
         revoked = 0
-        # 页面按创建时间排序: 老的在前, 新下载的追加在尾部。
-        # 必须保留尾部 keep_count 台 (最新 = 库存对应的 conf), 砍头部 to_revoke 台 (最老)。
-        # 教训: 曾写 certs[keep_count:...] 保留最老 —— 每轮都把自己刚下载的证书吊销掉。
-        for name, btn in certs[:to_revoke]:
+        for name, btn in to_revoke_rows:
             try:
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
                 time.sleep(0.3)
@@ -605,7 +651,8 @@ def reconcile_certificates(driver, keep_count, _pass=1):
         # 稍候重新定位证书区+重新收集按钮复扫, 仍超标就递归补吊, 最多 3 轮。
         if revoked and _pass < 3:
             time.sleep(1.5)
-            return revoked + reconcile_certificates(driver, keep_count, _pass + 1)
+            return revoked + reconcile_certificates(driver, keep_count, _pass + 1,
+                                                    expected_names=expected_names)
         return revoked
     except Exception as exc:
         log("CERT", f"证书裁剪异常 (不影响主流程): {exc}")
@@ -1280,7 +1327,26 @@ def main():
                 elif live_ids is not None:
                     log("CLEANUP", "扫描到 0 台 (页面状态异常?), 保留本轮 downloaded 继续吊销")
                 if downloaded:
-                    reconcile_certificates(driver, len(downloaded))
+                    # 精确吊销集合 = 旧库存 conf ∪ 本轮新下载 conf 的条目名。
+                    # 页面上其余「哈希形状」条目 = 库存外孤儿, 全部吊销; wh-gate 等
+                    # 具名证书非哈希形状, 天然免疫。
+                    expected = set()
+                    for _conf in store.values():
+                        n = _cert_entry_name(_conf)
+                        if n:
+                            expected.add(n)
+                    for _fn in os.listdir(dl):
+                        if _fn.lower().endswith(".conf"):
+                            try:
+                                n = _cert_entry_name(open(os.path.join(dl, _fn),
+                                                          encoding="utf-8", errors="replace").read())
+                            except Exception:
+                                n = None
+                            if n:
+                                expected.add(n)
+                    log("CLEANUP", f"精确吊销集合: 库存 {len(store)} + 本轮新下 -> {len(expected)} 个条目名")
+                    reconcile_certificates(driver, len(downloaded),
+                                           expected_names=expected or None)
                     log("CLEANUP", f"清理后保留 {len(downloaded)} 条")
                 else:
                     log("CLEANUP", "无可用记录, 跳过证书吊销")

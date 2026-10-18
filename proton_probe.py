@@ -116,13 +116,14 @@ def probe_and_filter(nodes, log, concurrency=16, timeout=8.0,
     now = time.monotonic()
     with getattr(probe_and_filter, "_lock", threading.Lock()) as lock:
         cache = getattr(probe_and_filter, "_cache", {})
-        alive, fresh = [], 0
+        alive, fresh, cache_hits = [], 0, 0
         work = []
         for n in nodes:
             k = (n["server"], n["port"], n["public_key"][:16])
             c = cache.get(k)
             if c and (now - c[0]) < cooldown and c[1]:
                 alive.append(n)
+                cache_hits += 1
                 continue
             work.append(n)
         if not work:
@@ -141,7 +142,8 @@ def probe_and_filter(nodes, log, concurrency=16, timeout=8.0,
                     cache[k] = (now, False)
         setattr(probe_and_filter, "_lock", threading.Lock())
         setattr(probe_and_filter, "_cache", cache)
-    log("PROBE", f"存活 {len(alive)}/{len(nodes)} (本轮新测活 {fresh}, 其余命中冷却缓存)")
+    log("PROBE", f"存活 {len(alive)}/{len(nodes)} "
+                 f"(实测 {len(work)}, 其中测活 {fresh}; 命中冷却缓存 {cache_hits})")
     if alive and len(alive) / len(nodes) < min_alive_ratio:
         log("PROBE", f"存活率过低 (<{min_alive_ratio}), 视为探测环境异常, 保留全部节点")
         return nodes, 0
