@@ -313,6 +313,8 @@ def _legacy_downloads(driver, download_dir, downloaded_ids):
 # (只创建一次, 后续服务器复用同一证书, 避免免费版 key 槽被挤爆)。
 CERT_NAME = _env("PROTON_CERT_NAME", "wh-gate")
 PROTON_CERT_GC = os.environ.get("PROTON_CERT_GC", "0").strip().lower() in ("1", "true", "yes")
+# PROTON_CERT_PURGE=1: 清除账户所有旧证书 (仅此一次, 用完设回 0)
+PROTON_CERT_PURGE = os.environ.get("PROTON_CERT_PURGE", "0").strip().lower() in ("1", "true", "yes")
 
 
 def gc_certificates(driver):
@@ -397,6 +399,55 @@ def gc_certificates(driver):
         return revoked
     except Exception as exc:
         log("CERT", f"证书清理异常: {type(exc).__name__}: {exc}")
+        return 0
+
+
+def purge_certificates(driver):
+    """清除账户所有旧证书 (仅此一次, 用完设回 PROTON_CERT_PURGE=0)。\n
+    策略: 遍历所有证书条目, 逐个点击「×」删除按钮。\n
+    安全: 仅在执行时生效, 不影响后续运行。\n
+    """
+    log("CERT", "开始清除所有旧证书 (PROTON_CERT_PURGE=1)")
+    try:
+        # 等待页面加载
+        time.sleep(2)
+        deleted = 0
+        while True:
+            # 查找所有删除按钮 (× 图标或文本)
+            delete_btns = driver.find_elements(By.XPATH,
+                ".//*[contains(@class, 'certificate')]//button[contains(text(), '×') or contains(text(), '删除') or contains(text(), 'Delete') or @aria-label='删除'] | "
+                ".//*[normalize-space(text())='×'] | "
+                "//button[contains(., '×')]")
+            if not delete_btns:
+                break
+            try:
+                btn = delete_btns[0]
+                if not btn.is_displayed():
+                    break
+                btn.click()
+                time.sleep(1)
+                # 等待并确认删除对话框
+                try:
+                    confirm_btn = WebDriverWait(driver, 5).until(
+                        EC.element_to_be_clickable((By.XPATH,
+                            "//*[normalize-space(text())='确认'] | //*/button[normalize-space(text())='确定'] | //*/button[normalize-space(text())='删除'] | //*/button[contains(text(), 'Delete')]"))
+                    )
+                    if confirm_btn.is_displayed():
+                        confirm_btn.click()
+                        deleted += 1
+                        log("CERT", f"  已删除证书 ({deleted})")
+                        time.sleep(1)
+                except Exception:
+                    # 无弹窗直接删除成功
+                    deleted += 1
+                    log("CERT", f"  已删除证书 ({deleted})")
+            except Exception as exc:
+                log("CERT_DEBUG", f"删除证书异常: {exc}")
+                break
+        log("CERT", f"证书清除完成: 共删除 {deleted} 条")
+        return deleted
+    except Exception as exc:
+        log("CERT", f"证书清除异常: {type(exc).__name__}: {exc}")
         return 0
 
 
@@ -699,6 +750,9 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
     if not ensure_certificate(driver):
         return None
     gc_certificates(driver)  # 清理同名多余证书 (需 PROTON_CERT_GC=1)
+    if PROTON_CERT_PURGE:
+        purge_certificates(driver)  # 清除所有旧证书 (需 PROTON_CERT_PURGE=1)
+        log("CERT", "已清除所有旧证书, 将重新创建")
     new_count = 0
     countries = driver.find_elements(By.CSS_SELECTOR, "details")
     if not countries:
