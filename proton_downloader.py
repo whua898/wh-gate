@@ -481,10 +481,7 @@ def _save_conf_text(download_dir, sid, text):
 
 
 def _await_conf(driver, sid, download_dir, before, timeout=12, t0_click=None):
-    """点「创建/下载」后拿配置:
-    1) 弹窗出现 -> 提取「文本」页签全文直接落盘 (不赌 Chrome 下载行为, 最稳);
-    2) 提取不到 -> 切「文本」页签重试, 仍不行点弹窗「下载」;
-    3) 没弹窗/都失败 -> 配置记录区行内「下载」兜底。返回 .conf 文件名或 None。"""
+    """点「创建/下载」后拿配置: 返回 (文件名, 路径标签)。"""
     t0 = time.time()
     if t0_click is None:
         t0_click = t0  # 调用方没传计时起点, 用本机此刻代替
@@ -494,7 +491,7 @@ def _await_conf(driver, sid, download_dir, before, timeout=12, t0_click=None):
         now = {f for f in os.listdir(download_dir) if f.lower().endswith(".conf")}
         if now - before:
             log("WG_DEBUG", f"{sid} 无弹窗已落盘: {sorted(now-before)}")
-            return sorted(now - before)[0]
+            return sorted(now - before)[0], "no_modal_file"
         if time.time() - t0 >= timeout:
             break
         time.sleep(0.5)
@@ -512,7 +509,7 @@ def _await_conf(driver, sid, download_dir, before, timeout=12, t0_click=None):
             fn = _save_conf_text(download_dir, sid, found)
             log("WG", f"{sid} 弹窗提取配置全文 -> {fn}")
             _close_conf_modal(driver)
-            return fn
+            return fn, "modal_text"
         if _click_outside_tr(driver, "下载", timeout=5):
             t1 = time.time()
             while time.time() - t1 < 8:
@@ -522,7 +519,7 @@ def _await_conf(driver, sid, download_dir, before, timeout=12, t0_click=None):
                     time.sleep(0.5)  # 等文件写完
                     log("WG_DEBUG", f"{sid} 弹窗内落盘 {sorted(now-before)[0]} total={time.time()-t0_click:.1f}s")
                     _close_conf_modal(driver)
-                    return sorted(now - before)[0]
+                    return sorted(now - before)[0], "modal_download"
                 time.sleep(0.5)
             log("WG_DEBUG", f"{sid} 弹窗下载等待 {time.time()-t1:.1f}s")
         log("WG_DEBUG", f"{sid} modal_path_end total={time.time()-t0_click:.1f}s")
@@ -558,8 +555,8 @@ def _await_conf(driver, sid, download_dir, before, timeout=12, t0_click=None):
                     break
                 time.sleep(0.5)
             if got:
-                return got
-    return None
+                return got, "fallback_record"
+    return None, "none"
 
 
 def _find_row_btn(driver, sid):
@@ -693,15 +690,16 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
                 ActionChains(driver).move_to_element(btn).click().perform()
         except Exception:
             continue
-        got = _await_conf(driver, sid, download_dir, before, t0_click=t0_click)
+        got, path = _await_conf(driver, sid, download_dir, before, t0_click=t0_click)
         elapsed = time.time() - t0_click
         if got:
             new_count += 1
             downloaded_ids.add(sid)
-            suffix = f", 耗时 {elapsed:.1f}s" + (" (走了兜底路径, 弹窗判定可能失效)" if elapsed > 15 else "")
+            path_label = {"modal_text": "弹窗提取", "modal_download": "弹窗下载", "fallback_record": "记录区兜底", "no_modal_file": "无弹窗", "none": "失败"}.get(path, path)
+            suffix = f", 耗时 {elapsed:.1f}s [{path_label}]"
             log("WG", f"[{summary}] 已创建并下载 {sid} ({got}), 本轮 {new_count}/{MAX_DL}{suffix}")
         else:
-            log("WG", f"{sid} 创建/下载未拿到文件, 跳过 (耗时 {elapsed:.1f}s, 弹窗判定可能失效)")
+            log("WG", f"{sid} 创建/下载未拿到文件, 跳过 (耗时 {elapsed:.1f}s, path={path})")
         time.sleep(random.randint(IV_MIN, IV_MAX))  # 防风控随机间隔 (PROTON_INTERVAL 可调)
     return True
 
