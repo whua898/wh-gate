@@ -10,7 +10,6 @@ name: ProtonVPN WireGuard Config Download
 on:
   workflow_dispatch:
     inputs:
-      PROTON_CERT_PURGE:
         description: '清除账户所有旧证书 (仅第一次运行后设回 0)'
         type: choice
         options:
@@ -53,7 +52,6 @@ jobs:
           PROTON_USER: ${{ secrets.PROTON_USER }}
           PROTON_PASS: ${{ secrets.PROTON_PASS }}
           PROTON_ENC_KEY: ${{ secrets.PROTON_ENC_KEY }}
-          PROTON_CERT_PURGE: ${{ github.event.inputs.PROTON_CERT_PURGE || '0' }}
           DOWNLOAD_SCOPE: ${{ vars.DOWNLOAD_SCOPE || 'all' }}
           MAX_DOWNLOADS_PER_SESSION: ${{ vars.MAX_DOWNLOADS_PER_SESSION || '20' }}
           PROTON_INTERVAL: ${{ vars.PROTON_INTERVAL || '5-15' }}

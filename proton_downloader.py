@@ -313,8 +313,7 @@ def _legacy_downloads(driver, download_dir, downloaded_ids):
 # (只创建一次, 后续服务器复用同一证书, 避免免费版 key 槽被挤爆)。
 CERT_NAME = _env("PROTON_CERT_NAME", "wh-gate")
 PROTON_CERT_GC = os.environ.get("PROTON_CERT_GC", "0").strip().lower() in ("1", "true", "yes")
-# PROTON_CERT_PURGE=1: 清除账户所有旧证书 (仅此一次, 用完设回 0)
-PROTON_CERT_PURGE = os.environ.get("PROTON_CERT_PURGE", "0").strip().lower() in ("1", "true", "yes")
+
 
 
 def gc_certificates(driver):
@@ -483,99 +482,6 @@ def _is_certificate_entry(cert_item):
         return False
 
 
-def purge_certificates(driver):
-    """清除账户所有旧证书 (仅此一次, 用完设回 PROTON_CERT_PURGE=0)。
-    策略: 只操作页面可见的证书条目，逐个点击删除按钮。
-    安全: 仅在执行时生效, 不影响后续运行。
-    """
-    log("CERT", "开始清除所有旧证书 (PROTON_CERT_PURGE=1)")
-    try:
-        time.sleep(2)
-        deleted = 0
-        skipped = 0
-        # 查找所有 details 元素
-        all_details = driver.find_elements(By.TAG_NAME, "details")
-        log("CERT_DEBUG", f"找到 {len(all_details)} 个 details 元素")
-
-        # 过滤出真正的证书条目
-        cert_items = [d for d in all_details if _is_certificate_entry(d)]
-        log("CERT_DEBUG", f"其中 {len(cert_items)} 个为证书条目")
-
-        for idx, cert_item in enumerate(cert_items):
-            try:
-                # 获取证书名称
-                try:
-                    summary = cert_item.find_element(By.TAG_NAME, "summary")
-                    cert_name = summary.text.strip()[:40]
-                except Exception:
-                    cert_name = f"证书{idx+1}"
-
-                log("CERT_DEBUG", f"处理证书 [{idx+1}/{len(cert_items)}]: {cert_name}")
-
-                # 查找删除按钮
-                delete_btn = _find_delete_btn(cert_item)
-
-                if not delete_btn:
-                    log("CERT_DEBUG", f"  未找到删除按钮, 跳过")
-                    skipped += 1
-                    continue
-
-                # 滚动到按钮可见区域
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", delete_btn)
-                time.sleep(0.5)
-
-                # 点击删除按钮
-                try:
-                    delete_btn.click()
-                except Exception:
-                    driver.execute_script("arguments[0].click();", delete_btn)
-                log("CERT_DEBUG", f"  已点击删除按钮, 等待确认对话框...")
-
-                # 显式等待确认对话框出现 (最多 10 秒)
-                confirm_btn = None
-                try:
-                    confirm_btn = WebDriverWait(driver, 10).until(
-                        EC.element_to_be_clickable((By.XPATH,
-                            "//button[contains(text(), '吊销') or normalize-space(text())='吊销']"))
-                    )
-                    log("CERT_DEBUG", f"  找到确认按钮: {confirm_btn.get_attribute('outerHTML')[:80]}")
-                except Exception as exc:
-                    log("CERT_DEBUG", f"  未找到'吊销'按钮: {type(exc).__name__}")
-                    try:
-                        confirms = driver.find_elements(By.XPATH,
-                            "//button[normalize-space(text())='吊销' or contains(text(), '吊销') or normalize-space(text())='确认' or normalize-space(text())='确定']")
-                        for cb in confirms:
-                            if cb.is_displayed():
-                                confirm_btn = cb
-                                break
-                    except Exception:
-                        pass
-
-                if confirm_btn:
-                    try:
-                        confirm_btn.click()
-                    except Exception:
-                        driver.execute_script("arguments[0].click();", confirm_btn)
-                    log("CERT", f"  已确认吊销: {cert_name}")
-                    time.sleep(2)
-                else:
-                    log("CERT", f"  未找到确认按钮, 跳过: {cert_name}")
-
-                deleted += 1
-
-            except Exception as exc:
-                log("CERT_DEBUG", f"处理证书异常: {exc}")
-                continue
-
-        log("CERT", f"证书清除完成: 成功删除 {deleted} 条, 跳过 {skipped} 条")
-        return deleted
-    except Exception as exc:
-        log("CERT", f"证书清除异常: {type(exc).__name__}: {exc}")
-        return 0
-
-
-
-def _click_text(driver, text, timeout=30):
     """按文本点可见元素。
     element_to_be_clickable 只看首个匹配 —— 页面若有隐藏同名副本 (移动端菜单/
     页脚链接) 会永远等不到; 这里遍历全部匹配、跳过隐藏节点, 原生 click 被挡时
@@ -874,16 +780,6 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
     if not ensure_certificate(driver):
         return None
     gc_certificates(driver)  # 清理同名多余证书 (需 PROTON_CERT_GC=1)
-    if PROTON_CERT_PURGE:
-        purge_certificates(driver)  # 清除所有旧证书 (需 PROTON_CERT_PURGE=1)
-        log("CERT", "已清除所有旧证书, 将重新创建")
-        # 删除证书后页面结构可能变化, 重新点击 WireGuard 标签刷新视图
-        try:
-            _click_text(driver, "WireGuard", timeout=15)
-            time.sleep(1)
-        except Exception as exc:
-            log("CERT_DEBUG", f"重新点击 WireGuard 标签失败: {exc}")
-    new_count = 0
     countries = driver.find_elements(By.CSS_SELECTOR, "details")
     if not countries:
         log("WG", "未找到服务器分组 (选择器失效)")
