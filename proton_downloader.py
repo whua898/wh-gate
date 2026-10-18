@@ -467,9 +467,12 @@ def purge_certificates(driver):
                     "//button[contains(@aria-label, '删除') or contains(@aria-label, '关闭') or @role='button']"))
             except: pass
             try:
-                # 匹配各种元素类型的 × 按钮 (button/span/div/i/svg/a)
-                delete_btns.extend(driver.find_elements(By.XPATH,
-                    "(//button | //span | //div | //i | //svg | //a)[normalize-space(text())='×' or normalize-space(text())='x' or contains(text(), '×') or contains(text(), 'x')]"))
+                # 匹配各种元素类型的 × 按钮 (分步查找避免复杂 XPath 报错)
+                for tag in ("button", "span", "div", "i", "svg", "a"):
+                    try:
+                        delete_btns.extend(driver.find_elements(By.XPATH,
+                            f"//{tag}[normalize-space(text())='×' or normalize-space(text())='x' or contains(text(), '×') or contains(text(), 'x')]"))
+                    except: pass
             except: pass
             try:
                 delete_btns.extend(driver.find_elements(By.XPATH,
