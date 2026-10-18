@@ -422,14 +422,16 @@ def reconcile_certificates(driver, keep_count):
         time.sleep(0.5)
 
         # 只认两标题之间的已创建配置: “这些配置适用于 ...” ~ “为需要生成的配置文件设置名称”
+        # 注意: 必须用“自身文本”定位 (text() 直接子节点), 不能用 normalize-space(.)
+        # (后者会把祖先容器也匹配进来, 导致 compareDocumentPosition 恒为 False -> 范围内 0 个)
         start_el = None
         end_el = None
         try:
-            _starts = driver.find_elements(By.XPATH, "//*[contains(normalize-space(.), '这些配置适用于')]")
-            _ends = driver.find_elements(By.XPATH, "//*[contains(normalize-space(.), '为需要生成的配置文件设置名称')]")
+            _starts = driver.find_elements(By.XPATH, "//*[text()[contains(., '这些配置适用于')]]")
+            _ends = driver.find_elements(By.XPATH, "//*[text()[contains(., '为需要生成的配置文件设置名称')]]")
             for _e in _starts:
                 try:
-                    if _e.is_displayed():
+                    if _e.is_displayed() and len(_e.text.strip()) < 200:
                         start_el = _e
                         break
                 except Exception:
@@ -438,7 +440,7 @@ def reconcile_certificates(driver, keep_count):
                 start_el = _starts[0]
             for _e in _ends:
                 try:
-                    if _e.is_displayed():
+                    if _e.is_displayed() and len(_e.text.strip()) < 200:
                         end_el = _e
                         break
                 except Exception:
@@ -450,11 +452,17 @@ def reconcile_certificates(driver, keep_count):
         all_details = driver.find_elements(By.TAG_NAME, "details")
         ranged = []
         if start_el is not None and end_el is not None:
+            try:
+                log("CERT", f"证书区起: <{start_el.tag_name}> '{(start_el.text or '').strip()[:40]}' / "
+                           f"止: <{end_el.tag_name}> '{(end_el.text or '').strip()[:40]}'")
+            except Exception:
+                pass
             for d in all_details:
                 try:
                     _in = driver.execute_script(
                         "var s=arguments[0],e=arguments[1],d=arguments[2];"
                         "if(!s||!e||!d) return false;"
+                        "if(s===d||e===d) return false;"
                         "var sBeforeD=(s.compareDocumentPosition(d)&4)!==0;"
                         "var dBeforeE=(d.compareDocumentPosition(e)&4)!==0;"
                         "return sBeforeD && dBeforeE;",
@@ -1091,8 +1099,31 @@ def _scan_available_ids(driver):
                     break
         except Exception:
             pass
-        # 展开所有折叠区，逐台解析 ID + 负载百分比
-        details = driver.find_elements(By.CSS_SELECTOR, "details")
+        # 只扫“或指定服务器”之下的国家分组合（国家 details 里才有 tr 服务器行）；
+        # 顶部证书区 / 帮助区 details 没有 tr，会被天然跳过
+        try:
+            _cat = None
+            for _el in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.), '或指定服务器')]"):
+                try:
+                    if _el.is_displayed():
+                        _cat = _el
+                        break
+                except Exception:
+                    continue
+            if _cat is None:
+                _els = driver.find_elements(By.XPATH, "//*[contains(normalize-space(.), '或指定服务器')]")
+                if _els:
+                    _cat = _els[0]
+            if _cat is not None:
+                details = driver.execute_script(
+                    "var cat=arguments[0]; var out=[];"
+                    "var all=cat.getElementsByTagName('details');"
+                    "for(var i=0;i<all.length;i++){out.push(all[i]);}"
+                    "return out;", _cat)
+            else:
+                details = driver.find_elements(By.CSS_SELECTOR, "details")
+        except Exception:
+            details = driver.find_elements(By.CSS_SELECTOR, "details")
         for d in details:
             try:
                 summary = d.find_element(By.TAG_NAME, "summary")
