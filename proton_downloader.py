@@ -427,7 +427,7 @@ def purge_certificates(driver):
             
             # 查找所有可点击元素
             clickable = driver.find_elements(By.XPATH,
-                "//button | //a[@href] | //[contains(@role, 'button')] | //*[contains(@onclick)]")
+                "//button | //a[@href] | //*[contains(@role, 'button')] | //*[contains(@onclick)]")
             log("CERT_DEBUG", f"可点击元素: {len(clickable)} 个")
             
             # 多种方式查找删除按钮
