@@ -825,6 +825,12 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
     if PROTON_CERT_PURGE:
         purge_certificates(driver)  # 清除所有旧证书 (需 PROTON_CERT_PURGE=1)
         log("CERT", "已清除所有旧证书, 将重新创建")
+        # 删除证书后页面结构可能变化, 重新点击 WireGuard 标签刷新视图
+        try:
+            _click_text(driver, "WireGuard", timeout=15)
+            time.sleep(1)
+        except Exception as exc:
+            log("CERT_DEBUG", f"重新点击 WireGuard 标签失败: {exc}")
     new_count = 0
     countries = driver.find_elements(By.CSS_SELECTOR, "details")
     if not countries:
