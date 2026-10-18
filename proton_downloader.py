@@ -524,6 +524,10 @@ def reconcile_certificates(driver, keep_count, _pass=1, expected_names=None):
                     certs.append((name, delete_btn))
             except Exception:
                 continue
+        skipped_rows = len(ranged) - len(certs)
+        if skipped_rows:
+            log("CERT", f"证书区 {len(ranged)} 个 details, 收集到 {len(certs)} 个可吊销条目 "
+                        f"({skipped_rows} 个无名称/删除按钮, 不参与匹配)")
 
         # 具名常驻证书 (wh-gate) 永不吊销: summary.text 可能是多行 (wh-gate 行会带
         # "于 xx 过期/吊销"), 只比首行。
@@ -1330,11 +1334,18 @@ def main():
                     # 精确吊销集合 = 旧库存 conf ∪ 本轮新下载 conf 的条目名。
                     # 页面上其余「哈希形状」条目 = 库存外孤儿, 全部吊销; wh-gate 等
                     # 具名证书非哈希形状, 天然免疫。
+                    # 注意: 库存里已下线/高负载的旧台 (sid 不在 downloaded) 合并时会被
+                    # 剔除, 其页面条目属「未来孤儿」, 必须同轮吊销 —— 否则页面恒多条目。
                     expected = set()
-                    for _conf in store.values():
+                    kept_old = 0
+                    for _key, _conf in store.items():
+                        _sid = os.path.splitext(_key)[0].upper()
+                        if _sid not in downloaded:
+                            continue
                         n = _cert_entry_name(_conf)
                         if n:
                             expected.add(n)
+                            kept_old += 1
                     for _fn in os.listdir(dl):
                         if _fn.lower().endswith(".conf"):
                             try:
@@ -1344,7 +1355,7 @@ def main():
                                 n = None
                             if n:
                                 expected.add(n)
-                    log("CLEANUP", f"精确吊销集合: 库存 {len(store)} + 本轮新下 -> {len(expected)} 个条目名")
+                    log("CLEANUP", f"精确吊销集合: 存量保留 {kept_old} + 本轮新下 -> {len(expected)} 个条目名")
                     reconcile_certificates(driver, len(downloaded),
                                            expected_names=expected or None)
                     log("CLEANUP", f"清理后保留 {len(downloaded)} 条")
