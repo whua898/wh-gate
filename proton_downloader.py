@@ -780,7 +780,6 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
     if not ensure_certificate(driver):
         return None
     gc_certificates(driver)  # 清理同名多余证书 (需 PROTON_CERT_GC=1)
-            time.sleep(1)
     new_count = 0
     countries = driver.find_elements(By.CSS_SELECTOR, "details")
     if not countries:
