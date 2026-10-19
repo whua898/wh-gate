@@ -1327,32 +1327,39 @@ def main():
                     added = live_ids - downloaded
                     if added:
                         log("CLEANUP", f"新增 {len(added)} 条低负载服务器记录: {sorted(added)}")
-                    # downloaded 保留历史 + 本轮新下载, 不被 live_ids 覆盖。
-                    # 后续裁剪加密库存时用 downloaded 做 filter。
+                    # downloaded 同步为页面当前显示的可用节点 (每国负载最低 PER_COUNTRY 台),
+                    # 这是网页端及库存应始终保持的目标数量。
+                    downloaded = live_ids
                 elif live_ids is not None:
                     log("CLEANUP", "扫描到 0 台 (页面状态异常?), 保留本轮 downloaded 继续吊销")
-                # 仅在本轮有新下载 conf 时才计算精确吊销集合。
+                # 精确吊销集合 = downloaded 中每个 sid 对应的证书条目名。
+                # 来源: 旧库存 store 中 sid 在 downloaded 的 conf + 本轮 dl 目录新下载的 conf。
                 # 页面上其余「哈希形状」条目 = 库存外孤儿, 全部吊销; wh-gate 等
                 # 具名证书非哈希形状, 天然免疫。
-                # 不再把旧库存条目写入 expected —— 否则页面条目恒 = 旧库存 + 本轮新下,
-                # 导致页面显示超过目标数量。
+                # 这样页面证书条目严格 = downloaded 数量 (每国 PER_COUNTRY 台), 不会累积。
+                expected = set()
+                kept_old = 0
+                for _key, _conf in store.items():
+                    _sid = os.path.splitext(_key)[0].upper()
+                    if _sid not in downloaded:
+                        continue
+                    n = _cert_entry_name(_conf)
+                    if n:
+                        expected.add(n)
+                        kept_old += 1
                 new_confs = [f for f in os.listdir(dl) if f.lower().endswith(".conf")]
-                if new_confs:
-                    expected = set()
-                    for _fn in new_confs:
-                        try:
-                            n = _cert_entry_name(open(os.path.join(dl, _fn),
-                                                      encoding="utf-8", errors="replace").read())
-                        except Exception:
-                            n = None
-                        if n:
-                            expected.add(n)
-                    log("CLEANUP", f"精确吊销集合: 本轮新下 {len(expected)} 个条目名")
-                    reconcile_certificates(driver, len(new_confs),
-                                           expected_names=expected or None)
-                    log("CLEANUP", f"清理后保留 {len(new_confs)} 条")
-                else:
-                    log("CLEANUP", "本轮无新下载 conf, 跳过证书吊销")
+                for _fn in new_confs:
+                    try:
+                        n = _cert_entry_name(open(os.path.join(dl, _fn),
+                                                  encoding="utf-8", errors="replace").read())
+                    except Exception:
+                        n = None
+                    if n:
+                        expected.add(n)
+                log("CLEANUP", f"精确吊销集合: 存量保留 {kept_old} + 本轮新下 {len(new_confs)} -> {len(expected)} 个条目名")
+                reconcile_certificates(driver, len(downloaded),
+                                       expected_names=expected or None)
+                log("CLEANUP", f"清理后保留 {len(downloaded)} 条")
             except Exception as exc:
                 log("CLEANUP", f"清理失败 (不影响主流程): {exc}")
             try:
