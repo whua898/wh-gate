@@ -56,7 +56,7 @@ PROXY = _env("PROTON_PROXY", "")
 SCOPE = os.environ.get("DOWNLOAD_SCOPE", "all").strip().lower() or "all"
 MAX_DL = max(1, int(os.environ.get("MAX_DOWNLOADS_PER_SESSION", "20") or "20"))
 # 下载间隔秒数 (min-max, 防风控)。默认 5-15s; 账号被限流/警告时调回 60-90。
-_iv = re.findall(r"\d+", os.environ.get("PROTON_INTERVAL", "1-3") or "1-3")
+_iv = re.findall(r"\d+", os.environ.get("PROTON_INTERVAL", "0-1") or "0-1")
     # 默认 2-5s: 每轮只下 ~10 台, 频率不高; 如遇限流可设 PROTON_INTERVAL=10-30
 IV_MIN, IV_MAX = (int(_iv[0]), int(_iv[1])) if len(_iv) >= 2 else (2, 5)
 if IV_MIN > IV_MAX:
@@ -409,7 +409,7 @@ def gc_certificates(driver):
                     log("CERT", f"  已吊销: {preview} (到期 {dt.strftime('%Y-%m-%d')})")
                 else:
                     log("CERT", f"  吊销确认失败 (未找到确认按钮): {preview}")
-                time.sleep(0.5)
+                time.sleep(0.1)
             except Exception as exc:
                 log("CERT_DEBUG", f"  吊销异常: {preview} - {exc}")
         log("CERT", f"证书清理完成: 成功吊销 {revoked}/{len(to_revoke)} 条")
@@ -454,7 +454,7 @@ def reconcile_certificates(driver, keep_count, _pass=1, expected_names=None):
             _click_text(driver, "WireGuard", timeout=15)
         except Exception:
             pass
-        time.sleep(0.5)
+        time.sleep(0.1)
 
         # 只认两标题之间的已创建配置: “这些配置适用于 ...” ~ “为需要生成的配置文件设置名称”
         # 注意: 必须用“自身文本”定位 (text() 直接子节点), 不能用 normalize-space(.)
@@ -541,6 +541,7 @@ def reconcile_certificates(driver, keep_count, _pass=1, expected_names=None):
         # "于 xx 过期/吊销"), 只比首行。
         certs = [c for c in certs if c[0].splitlines()[0].strip() != CERT_NAME]
         total = len(certs)
+        to_revoke_rows = []
         if keep_count <= 0 and total > 0:
             log("CERT", f"保留数量为 0, 将全部吊销 {total} 个证书 (清空历史)")
             to_revoke_rows = certs[:]
@@ -593,7 +594,7 @@ def reconcile_certificates(driver, keep_count, _pass=1, expected_names=None):
                 if _btn is not None:
                     try:
                         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", _btn)
-                        time.sleep(0.2)
+                        time.sleep(0.1)
                         try:
                             _btn.click()
                         except Exception:
@@ -739,7 +740,7 @@ def _click_text(driver, text, timeout=30):
                     if not el.is_displayed():
                         continue
                     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
-                    time.sleep(0.5)
+                    time.sleep(0.1)
                     try:
                         el.click()
                     except Exception:
@@ -843,7 +844,7 @@ def _click_outside_tr(driver, text, timeout=10):
         return False
     try:
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
-        time.sleep(0.5)
+        time.sleep(0.1)
         el.click()
     except Exception:
         try:
@@ -866,7 +867,7 @@ def _close_conf_modal(driver):
     while time.time() - t0 < 2:
         if not _modal_visible(driver):
             return True
-        time.sleep(0.2)
+        time.sleep(0.1)
     # 快速确认关闭, 最多等 2s 而非 8s (弹窗关闭后 React 可能慢半拍)
     # 改为: 点击关闭/ESC 后只等 2s 确认, 不长时间轮询
     # (上面循环已改 8->2, sleep 0.5->0.2, 总共最多 ~40 次调用被砍掉大半)
@@ -895,7 +896,7 @@ def _save_conf_text(download_dir, sid, text):
     return fn
 
 
-def _await_conf(driver, sid, download_dir, before, timeout=10, t0_click=None):
+def _await_conf(driver, sid, download_dir, before, timeout=5, t0_click=None):
     """点「创建/下载」后拿配置: 返回 (文件名, 路径标签)。"""
     t0 = time.time()
     if t0_click is None:
@@ -909,7 +910,7 @@ def _await_conf(driver, sid, download_dir, before, timeout=10, t0_click=None):
             return sorted(now - before)[0], "no_modal_file"
         if time.time() - t0 >= timeout:
             break
-        time.sleep(0.5)
+        time.sleep(0.1)
     elapsed_wait = time.time() - t0
     if elapsed_wait >= timeout:
         log("WG_DEBUG", f"{sid} 弹窗超时 {elapsed_wait:.1f}s (> {timeout}s)")
@@ -927,15 +928,15 @@ def _await_conf(driver, sid, download_dir, before, timeout=10, t0_click=None):
             return fn, "modal_text"
         if _click_outside_tr(driver, "下载", timeout=5):
             t1 = time.time()
-            while time.time() - t1 < 5:
+            while time.time() - t1 < 3:
                 now = {f for f in os.listdir(download_dir)
                        if f.lower().endswith(".conf")}
                 if now - before:
-                    time.sleep(0.5)  # 等文件写完
+                    time.sleep(0.1)  # 等文件写完
                     log("WG_DEBUG", f"{sid} 弹窗内落盘 {sorted(now-before)[0]} total={time.time()-t0_click:.1f}s")
                     _close_conf_modal(driver)
                     return sorted(now - before)[0], "modal_download"
-                time.sleep(0.5)
+                time.sleep(0.1)
             log("WG_DEBUG", f"{sid} 弹窗下载等待 {time.time()-t1:.1f}s")
         log("WG_DEBUG", f"{sid} modal_path_end total={time.time()-t0_click:.1f}s")
     _close_conf_modal(driver)  # 收尾: 无论成败都不留弹窗挡路
@@ -959,7 +960,7 @@ def _await_conf(driver, sid, download_dir, before, timeout=10, t0_click=None):
                 now = {f for f in os.listdir(download_dir)
                        if f.lower().endswith(".conf")}
                 if now - before:
-                    time.sleep(0.5)
+                    time.sleep(0.1)
                     log("WG_DEBUG", f"{sid} 记录区已落盘 {sorted(now-before)[0]} elapsed={time.time()-t0_click:.1f}s")
                     got = sorted(now - before)[0]
                     break
@@ -968,7 +969,7 @@ def _await_conf(driver, sid, download_dir, before, timeout=10, t0_click=None):
                     got = _save_conf_text(download_dir, sid, found)
                     _close_conf_modal(driver)
                     break
-                time.sleep(0.5)
+                time.sleep(0.1)
             if got:
                 return got, "fallback_record"
     return None, "none"
@@ -1014,7 +1015,7 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
         log("WG", f"找不到 WireGuard 页签: {type(exc).__name__} (站点可能改版)")
         return None
     # WireGuard 页签点击后 React 切 tab, 0.5s 足够; 原 3s 纯浪费
-    time.sleep(0.5)
+    time.sleep(0.1)
     if not ensure_certificate(driver):
         return None
     gc_certificates(driver)  # 清理同名多余证书 (需 PROTON_CERT_GC=1)
@@ -1036,7 +1037,7 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
             driver.execute_script("arguments[0].open = true;", c)
             # details 展开后 DOM 立即可查 (原生 HTML 细节元素, 不是 React 重渲染),
             # 0.2s 足够让 tr 渲染进来; 原 1s 纯浪费 (55 个分组 × 0.8s ≈ 44s 白等)
-            time.sleep(0.2)
+            time.sleep(0.1)
             # 行内读每台的真实负载: 遍历 tr, 台名取第 1 个 td, 负载扫描全行文本
             # 里的 "NN%"。summary 上没带百分比 (原版 regex 全落空 -> 哨兵 999%),
             # 所以必须从行内取; 取不到负载的台仍入队, 按 999 排最后。
@@ -1115,7 +1116,7 @@ def process_wireguard_tab(driver, download_dir, downloaded_ids):
             btn = downs[0]
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
         # scrollIntoView 完成即定位, 原 1s 防"页面还没滚到"多余 (原生 DOM 滚动同步完成)
-        time.sleep(0.2)
+        time.sleep(0.1)
         t0_click = time.time()  # 记录本机开始时刻, 用于 log 每台耗时
         before = {f for f in os.listdir(download_dir) if f.lower().endswith(".conf")}
         try:
