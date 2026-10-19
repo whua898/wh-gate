@@ -56,7 +56,7 @@ PROXY = _env("PROTON_PROXY", "")
 SCOPE = os.environ.get("DOWNLOAD_SCOPE", "all").strip().lower() or "all"
 MAX_DL = max(1, int(os.environ.get("MAX_DOWNLOADS_PER_SESSION", "20") or "20"))
 # 下载间隔秒数 (min-max, 防风控)。默认 5-15s; 账号被限流/警告时调回 60-90。
-_iv = re.findall(r"\d+", os.environ.get("PROTON_INTERVAL", "5-15") or "5-15")
+_iv = re.findall(r"\d+", os.environ.get("PROTON_INTERVAL", "1-3") or "1-3")
     # 默认 2-5s: 每轮只下 ~10 台, 频率不高; 如遇限流可设 PROTON_INTERVAL=10-30
 IV_MIN, IV_MAX = (int(_iv[0]), int(_iv[1])) if len(_iv) >= 2 else (2, 5)
 if IV_MIN > IV_MAX:
@@ -316,6 +316,14 @@ PROTON_CERT_GC = os.environ.get("PROTON_CERT_GC", "0").strip().lower() in ("1", 
 
 
 def gc_certificates(driver):
+
+    # 【先清历史】: 吊销页面上所有现有 WireGuard 配置, 再按筛选条件重新创建
+    # 这样页面条目严格 = 本轮筛选出的数量, 不会残留历史多余条目
+    try:
+        reconcile_certificates(driver, 0)
+        log("WG", "已清空页面所有历史 WireGuard 配置")
+    except Exception as exc:
+        log("WG_DEBUG", f"清空历史配置异常: {exc}")
     """清理同名证书的多余副本, 只保留过期日期最晚的那一个。
 
     安全开关: PROTON_CERT_GC=1 才启用, 默认关闭 (避免误吊销活跃证书)。
@@ -534,38 +542,11 @@ def reconcile_certificates(driver, keep_count, _pass=1, expected_names=None):
         certs = [c for c in certs if c[0].splitlines()[0].strip() != CERT_NAME]
         total = len(certs)
         if keep_count <= 0 and total > 0:
-            log("CERT", f"保留数为 0 但页面有 {total} 台证书 (判定扫描异常), 跳过吊销以防误清空")
-            return 0
-        if expected_names:
-            # 精确吊销 (条目名映射已破解): 条目名 = base64(SHA-512(conf 客户端公钥)),
-            # 与库存 conf 一一对应。只吊「形状像哈希名 (88字符 base64) 但不在库存集合」
-            # 的条目; 非哈希形状 (wh-gate 等手工具名证书) 一律免疫。不依赖创建顺序。
-            to_revoke_rows = []
-            kept_candidates = []
-            kept_protected = 0
-            for c in certs:
-                nm = c[0].splitlines()[0].strip()
-                if nm in expected_names:
-                    kept_candidates.append(c)
-                    continue
-                if not _HASH_NAME_RE.fullmatch(nm):
-                    kept_protected += 1
-                    continue
-                to_revoke_rows.append(c)
+            log("CERT", f"保留数量为 0, 将全部吊销 {total} 个证书 (清空历史)")
+            to_revoke_rows = certs[:]
             kept_by_name = 0
-            if len(kept_candidates) > keep_count:
-                to_revoke_rows.extend(kept_candidates[keep_count:])
-                kept_candidates = kept_candidates[:keep_count]
-            kept_by_name = len(kept_candidates)
-            log("CERT", f"精确匹配: 库存对应保留 {kept_by_name}, 具名证书保护 {kept_protected}, "
-                    f"待吊销 {len(to_revoke_rows)} (库存集合 {len(expected_names)}, keep_count={keep_count})")
-            if not to_revoke_rows:
-                log("CERT", "页面无库存外多余条目, 无需清理")
-                return 0
-        else:
-            if total <= keep_count:
-                log("CERT", f"证书 {total} 台 <= 库存 {keep_count} 台, 无需清理")
-                return 0
+            kept_protected = 0
+
             to_revoke = total - keep_count
             log("CERT", f"裁剪证书: {total} 台 -> 保留 {keep_count} 台, 吊销 {to_revoke} 台")
             # 无精确集合时的回退策略: 按创建时间排序, 老的在前, 砍头部。
@@ -914,7 +895,7 @@ def _save_conf_text(download_dir, sid, text):
     return fn
 
 
-def _await_conf(driver, sid, download_dir, before, timeout=25, t0_click=None):
+def _await_conf(driver, sid, download_dir, before, timeout=10, t0_click=None):
     """点「创建/下载」后拿配置: 返回 (文件名, 路径标签)。"""
     t0 = time.time()
     if t0_click is None:
@@ -946,7 +927,7 @@ def _await_conf(driver, sid, download_dir, before, timeout=25, t0_click=None):
             return fn, "modal_text"
         if _click_outside_tr(driver, "下载", timeout=5):
             t1 = time.time()
-            while time.time() - t1 < 8:
+            while time.time() - t1 < 5:
                 now = {f for f in os.listdir(download_dir)
                        if f.lower().endswith(".conf")}
                 if now - before:
