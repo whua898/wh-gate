@@ -541,19 +541,24 @@ def reconcile_certificates(driver, keep_count, _pass=1, expected_names=None):
             # 与库存 conf 一一对应。只吊「形状像哈希名 (88字符 base64) 但不在库存集合」
             # 的条目; 非哈希形状 (wh-gate 等手工具名证书) 一律免疫。不依赖创建顺序。
             to_revoke_rows = []
-            kept_by_name = 0
+            kept_candidates = []
             kept_protected = 0
             for c in certs:
                 nm = c[0].splitlines()[0].strip()
                 if nm in expected_names:
-                    kept_by_name += 1
+                    kept_candidates.append(c)
                     continue
                 if not _HASH_NAME_RE.fullmatch(nm):
                     kept_protected += 1
                     continue
                 to_revoke_rows.append(c)
+            kept_by_name = 0
+            if len(kept_candidates) > keep_count:
+                to_revoke_rows.extend(kept_candidates[keep_count:])
+                kept_candidates = kept_candidates[:keep_count]
+            kept_by_name = len(kept_candidates)
             log("CERT", f"精确匹配: 库存对应保留 {kept_by_name}, 具名证书保护 {kept_protected}, "
-                        f"待吊销 {len(to_revoke_rows)} (库存集合 {len(expected_names)})")
+                    f"待吊销 {len(to_revoke_rows)} (库存集合 {len(expected_names)}, keep_count={keep_count})")
             if not to_revoke_rows:
                 log("CERT", "页面无库存外多余条目, 无需清理")
                 return 0
